@@ -25,13 +25,23 @@ import (
 	"github.com/jmh-devel/kanban/internal/web"
 )
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "unknown"
+	built   = ""
+	dirty   = ""
+)
 
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(args []string) int {
+	if len(args) > 0 && isVersionArg(args[0]) {
+		printVersion()
+		return 0
+	}
+
 	command := "print"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command = args[0]
@@ -57,8 +67,8 @@ func run(args []string) int {
 		return runMove(args)
 	case "config":
 		return runConfig(args)
-	case "version", "--version", "-v":
-		fmt.Println(version)
+	case "version":
+		printVersion()
 		return 0
 	case "help", "--help", "-h":
 		printUsage()
@@ -68,6 +78,19 @@ func run(args []string) int {
 		printUsage()
 		return 2
 	}
+}
+
+func isVersionArg(arg string) bool {
+	return arg == "--version" || arg == "-v"
+}
+
+func printVersion() {
+	fmt.Print(app.RenderVersion(app.VersionInfo{
+		Version: version,
+		Commit:  commit,
+		Built:   built,
+		Dirty:   dirty,
+	}))
 }
 
 func runConfig(args []string) int {
@@ -513,7 +536,7 @@ Usage:
   kanban config set-runner --runner NAME [--mode implement|plan|review|audit] [--path DIR] [--repo owner/repo]
   kanban config runners
   kanban config show
-  kanban version
+  kanban version|--version|-v
 
 Behavior:
 	- init is dry-run by default and prints the gh publish command it would run

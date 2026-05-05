@@ -6,6 +6,11 @@ DEB_BASE_VERSION ?= 0.1.0
 DEB_BUILD_TIMESTAMP := $(shell date -u +%Y%m%d%H%M%S)
 DEB_BUILD_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo nogit)
 DEB_VERSION ?= $(DEB_BASE_VERSION)+$(DEB_BUILD_TIMESTAMP).$(DEB_BUILD_COMMIT)
+VERSION ?= dev
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_TIMESTAMP ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+DIRTY ?= $(shell test -z "$$(git status --porcelain 2>/dev/null)" 2>/dev/null && echo "" || echo dirty)
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.built=$(BUILD_TIMESTAMP) -X main.dirty=$(DIRTY)
 
 .PHONY: fmt fmt-check vet test build run check clean deb install
 
@@ -23,8 +28,11 @@ test:
 
 build:
 	mkdir -p $(BUILD_DIR)
-	go build -trimpath -ldflags "-s -w" -o $(BUILD_DIR)/$(APP) $(PKG)
+	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(APP) $(PKG)
 
+deb: VERSION := $(DEB_BASE_VERSION)
+deb: COMMIT := $(DEB_BUILD_COMMIT)
+deb: BUILD_TIMESTAMP := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 deb: build
 	rm -rf $(DEB_DIR)
 	mkdir -p $(DEB_DIR)/$(APP)_$(DEB_VERSION)/DEBIAN

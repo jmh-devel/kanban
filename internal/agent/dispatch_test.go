@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,8 +29,47 @@ func TestBuildCommandTsctlRequiresRepoKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := "tsctl agent dispatch example --runner tsctl --issue 12 --mode implement"
-	if command != want {
-		t.Fatalf("command = %q, want %q", command, want)
+	if !strings.HasPrefix(command, want) {
+		t.Fatalf("command = %q, want prefix %q", command, want)
+	}
+}
+
+func TestBuildCommandAutoDetectsReposFileFromWorkspace(t *testing.T) {
+	root := t.TempDir()
+	kanbanDir := filepath.Join(root, "kanban")
+	tsctlDir := filepath.Join(root, "tsctl")
+	if err := os.MkdirAll(kanbanDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(tsctlDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reposFile := filepath.Join(tsctlDir, "repos.yaml")
+	if err := os.WriteFile(reposFile, []byte("repos: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(kanbanDir); err != nil {
+		t.Fatal(err)
+	}
+
+	config := state.Config{
+		Repos: map[string]state.RepoConfig{"jmh-devel/example": {RepoKey: "example"}},
+		Runners: map[string]state.RunnerConfig{
+			"tsctl": {Kind: "tsctl_dispatch"},
+		},
+	}
+	command, err := BuildCommand(config, "jmh-devel/example", 12, "tsctl", "implement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "--repos-file " + reposFile
+	if !strings.Contains(command, want) {
+		t.Fatalf("command = %q, missing %q", command, want)
 	}
 }
 

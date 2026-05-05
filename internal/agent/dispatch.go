@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -129,6 +131,7 @@ func BuildCommand(config state.Config, repo string, issue int, runnerName string
 		return "", fmt.Errorf("runner %q is not configured", runnerName)
 	}
 	repoConfig := config.Repos[repo]
+	reposFile := resolveReposFile(repoConfig.ReposFile)
 
 	switch runner.Kind {
 	case state.DefaultRunner:
@@ -136,12 +139,20 @@ func BuildCommand(config state.Config, repo string, issue int, runnerName string
 		if target == "" {
 			target = repo
 		}
-		return shellJoin("tsctl", "agent", "dispatch", target, "--runner", runnerName, "--issue", strconv.Itoa(issue), "--mode", mode), nil
+		args := []string{"tsctl", "agent", "dispatch", target, "--runner", runnerName, "--issue", strconv.Itoa(issue), "--mode", mode}
+		if reposFile != "" {
+			args = append(args, "--repos-file", reposFile)
+		}
+		return shellJoin(args...), nil
 	case "tsctl_dispatch":
 		if repoConfig.RepoKey == "" {
 			return "", fmt.Errorf("repo %s has no repo_key; run: kanban config set-repo-key --repo-key NAME", repo)
 		}
-		return shellJoin("tsctl", "agent", "dispatch", repoConfig.RepoKey, "--runner", runnerName, "--issue", strconv.Itoa(issue), "--mode", mode), nil
+		args := []string{"tsctl", "agent", "dispatch", repoConfig.RepoKey, "--runner", runnerName, "--issue", strconv.Itoa(issue), "--mode", mode}
+		if reposFile != "" {
+			args = append(args, "--repos-file", reposFile)
+		}
+		return shellJoin(args...), nil
 	case "local_cli":
 		command := runner.Command
 		if command == "" {
@@ -197,6 +208,52 @@ func moveIssueToInProgress(ctx context.Context, repo string, issue int) error {
 		return fmt.Errorf("move issue to In Progress: %w", errors.New(message))
 	}
 	return nil
+}
+
+func resolveReposFile(configured string) string {
+	if value := strings.TrimSpace(configured); value != "" {
+		if fileExists(value) {
+			return value
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("KANBAN_REPOS_FILE")); value != "" {
+		if fileExists(value) {
+			return value
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("REPOS_FILE")); value != "" {
+		if fileExists(value) {
+			return value
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	candidates := []string{
+		filepath.Join(cwd, "repos.yaml"),
+		filepath.Join(cwd, "..", "tsctl", "repos.yaml"),
+	}
+	for _, path := range candidates {
+		if fileExists(path) {
+			return path
+		}
+	}
+	for parent := cwd; parent != filepath.Dir(parent); parent = filepath.Dir(parent) {
+		candidate := filepath.Join(parent, "tsctl", "repos.yaml")
+		if fileExists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
 func shellJoin(parts ...string) string {

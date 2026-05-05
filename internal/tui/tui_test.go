@@ -128,9 +128,9 @@ func TestBuildDispatchCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildDispatchCommand returned error: %v", err)
 	}
-	want := "tsctl agent dispatch example --runner tsctl --issue 318 --mode implement"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
+	wantPrefix := "tsctl agent dispatch example --runner tsctl --issue 318 --mode implement"
+	if !strings.HasPrefix(got, wantPrefix) {
+		t.Fatalf("got %q, want prefix %q", got, wantPrefix)
 	}
 }
 

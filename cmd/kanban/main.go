@@ -25,13 +25,23 @@ import (
 	"github.com/jmh-devel/kanban/internal/web"
 )
 
-var version = "dev"
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildDate = ""
+	dirty     = ""
+)
 
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(args []string) int {
+	if len(args) > 0 && isVersionFlag(args[0]) {
+		printVersion()
+		return 0
+	}
+
 	command := "print"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command = args[0]
@@ -57,8 +67,8 @@ func run(args []string) int {
 		return runMove(args)
 	case "config":
 		return runConfig(args)
-	case "version", "--version", "-v":
-		fmt.Println(version)
+	case "version":
+		printVersion()
 		return 0
 	case "help", "--help", "-h":
 		printUsage()
@@ -68,6 +78,38 @@ func run(args []string) int {
 		printUsage()
 		return 2
 	}
+}
+
+func isVersionFlag(arg string) bool {
+	return arg == "--version" || arg == "-v"
+}
+
+func printVersion() {
+	fmt.Print(formatVersion())
+}
+
+func formatVersion() string {
+	var builder strings.Builder
+	_, _ = fmt.Fprintf(&builder, "kanban %s\n", fallback(version, "dev"))
+	_, _ = fmt.Fprintf(&builder, "commit: %s\n", fallback(commit, "unknown"))
+	if buildDate != "" {
+		_, _ = fmt.Fprintf(&builder, "built: %s\n", buildDate)
+	} else {
+		_, _ = fmt.Fprintln(&builder, "built: unknown")
+	}
+	_, _ = fmt.Fprintf(&builder, "go: %s\n", runtime.Version())
+	_, _ = fmt.Fprintf(&builder, "platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	if dirty != "" {
+		_, _ = fmt.Fprintf(&builder, "dirty: %s\n", dirty)
+	}
+	return builder.String()
+}
+
+func fallback(value string, defaultValue string) string {
+	if strings.TrimSpace(value) == "" {
+		return defaultValue
+	}
+	return value
 }
 
 func runConfig(args []string) int {
@@ -513,7 +555,7 @@ Usage:
   kanban config set-runner --runner NAME [--mode implement|plan|review|audit] [--path DIR] [--repo owner/repo]
   kanban config runners
   kanban config show
-  kanban version
+  kanban version|--version|-v
 
 Behavior:
 	- init is dry-run by default and prints the gh publish command it would run

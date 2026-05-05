@@ -131,7 +131,7 @@ func BuildCommand(config state.Config, repo string, issue int, runnerName string
 		return "", fmt.Errorf("runner %q is not configured", runnerName)
 	}
 	repoConfig := config.Repos[repo]
-	reposFile := resolveReposFile(repoConfig.ReposFile)
+	reposFile := ResolveReposFile(repoConfig.ReposFile)
 
 	switch runner.Kind {
 	case state.DefaultRunner:
@@ -210,7 +210,7 @@ func moveIssueToInProgress(ctx context.Context, repo string, issue int) error {
 	return nil
 }
 
-func resolveReposFile(configured string) string {
+func ResolveReposFile(configured string) string {
 	if value := strings.TrimSpace(configured); value != "" {
 		if fileExists(value) {
 			return value

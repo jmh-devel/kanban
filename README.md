@@ -46,9 +46,13 @@ kanban
 
 # Explicit commands
 kanban init
+kanban tui
 kanban print
 kanban json
 kanban serve
+kanban open
+kanban move 123 review
+kanban config show
 
 # Override repo autodetection
 kanban print --repo jmh-devel/solarops.us
@@ -57,11 +61,20 @@ kanban serve --path /data/src/tacitsoft/core/solarops.us
 # Scaffold repo publish (dry-run by default)
 kanban init --owner your-org
 
+# Create lane labels when missing
+kanban init --setup-labels
+
 # Execute publish
 kanban init --owner your-org --apply
 
 # If origin already points at GitHub, owner can be auto-detected
 kanban init --apply
+
+# Launch standalone local UI:
+# - picks a free localhost port
+# - opens your default browser
+# - exits when browser window/tab closes
+kanban open
 ```
 
 ## Local server

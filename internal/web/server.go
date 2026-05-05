@@ -4,12 +4,15 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmh-devel/kanban/internal/agent"
@@ -23,8 +26,58 @@ var templateFS embed.FS
 type Loader func(context.Context) (github.Board, error)
 
 type Server struct {
-	loader Loader
-	tmpl   *template.Template
+	loader     Loader
+	tmpl       *template.Template
+	standalone *standaloneTracker
+}
+
+type standaloneTracker struct {
+	session   string
+	timeout   time.Duration
+	lastSeen  time.Time
+	hasSeen   bool
+	requested bool
+	mu        sync.Mutex
+}
+
+func newStandaloneTracker(session string, timeout time.Duration) *standaloneTracker {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return &standaloneTracker{session: session, timeout: timeout}
+}
+
+func (s *standaloneTracker) Touch(session string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if session != s.session {
+		return false
+	}
+	s.lastSeen = time.Now().UTC()
+	s.hasSeen = true
+	return true
+}
+
+func (s *standaloneTracker) Close(session string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if session != s.session {
+		return false
+	}
+	s.requested = true
+	return true
+}
+
+func (s *standaloneTracker) ShouldShutdown(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.requested {
+		return true
+	}
+	if !s.hasSeen {
+		return false
+	}
+	return now.Sub(s.lastSeen) > s.timeout
 }
 
 func NewServer(loader Loader) (*Server, error) {
@@ -36,21 +89,68 @@ func NewServer(loader Loader) (*Server, error) {
 }
 
 func (s *Server) Serve(addr string) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", s.handleIndex)
-	mux.HandleFunc("GET /api/board", s.handleBoard)
-	mux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
-	mux.HandleFunc("POST /api/dispatch", s.handleDispatch)
-	mux.HandleFunc("GET /healthz", s.handleHealth)
-
+	s.standalone = nil
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           requestLogger(mux),
+		Handler:           requestLogger(s.newMux()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	log.Printf("kanban server listening on http://%s", addr)
 	return server.ListenAndServe()
+}
+
+func (s *Server) ServeStandalone(addr string, session string, idleTimeout time.Duration) error {
+	if strings.TrimSpace(session) == "" {
+		return errors.New("standalone session is required")
+	}
+	s.standalone = newStandaloneTracker(session, idleTimeout)
+
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           requestLogger(s.newMux()),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	watchDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watchDone:
+				return
+			case <-ticker.C:
+				if !s.standalone.ShouldShutdown(time.Now().UTC()) {
+					continue
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_ = server.Shutdown(ctx)
+				cancel()
+				return
+			}
+		}
+	}()
+
+	log.Printf("kanban standalone server listening on http://%s", addr)
+	err := server.ListenAndServe()
+	close(watchDone)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
+}
+
+func (s *Server) newMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", s.handleIndex)
+	mux.HandleFunc("GET /api/board", s.handleBoard)
+	mux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
+	mux.HandleFunc("POST /api/dispatch", s.handleDispatch)
+	mux.HandleFunc("POST /api/standalone/heartbeat", s.handleStandaloneHeartbeat)
+	mux.HandleFunc("POST /api/standalone/close", s.handleStandaloneClose)
+	mux.HandleFunc("GET /healthz", s.handleHealth)
+	return mux
 }
 
 func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
@@ -141,10 +241,103 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	view := struct {
+		github.Board
+		StandaloneSession string
+	}{
+		Board: board,
+	}
+	if s.standalone != nil {
+		view.StandaloneSession = s.standalone.session
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.tmpl.ExecuteTemplate(w, "index.html", board); err != nil {
+	if err := s.tmpl.ExecuteTemplate(w, "index.html", view); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (s *Server) handleStandaloneHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if s.standalone == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	session := decodeStandaloneSession(r)
+	if !s.standalone.Touch(session) {
+		http.Error(w, "invalid standalone session", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleStandaloneClose(w http.ResponseWriter, r *http.Request) {
+	if s.standalone == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	session := decodeStandaloneSession(r)
+	if !s.standalone.Close(session) {
+		http.Error(w, "invalid standalone session", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func decodeStandaloneSession(r *http.Request) string {
+	if session := strings.TrimSpace(r.URL.Query().Get("session")); session != "" {
+		return session
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
+	if err == nil && len(body) > 0 {
+		var payload struct {
+			Session string `json:"session"`
+		}
+		if json.Unmarshal(body, &payload) == nil && strings.TrimSpace(payload.Session) != "" {
+			return strings.TrimSpace(payload.Session)
+		}
+		raw := strings.TrimSpace(string(body))
+		raw = strings.Trim(raw, "\"")
+		if raw != "" && !strings.Contains(raw, "=") && !strings.Contains(raw, "{") {
+			return raw
+		}
+		if values, parseErr := parseQuery(raw); parseErr == nil {
+			if session := strings.TrimSpace(values.Get("session")); session != "" {
+				return session
+			}
+		}
+	}
+	_ = r.ParseForm()
+	return strings.TrimSpace(r.FormValue("session"))
+}
+
+func parseQuery(raw string) (mapValues, error) {
+	pairs := strings.Split(raw, "&")
+	values := mapValues{}
+	for _, pair := range pairs {
+		if pair == "" {
+			continue
+		}
+		parts := strings.SplitN(pair, "=", 2)
+		key := parts[0]
+		if key == "" {
+			return nil, errors.New("invalid query")
+		}
+		value := ""
+		if len(parts) == 2 {
+			value = parts[1]
+		}
+		values[key] = append(values[key], value)
+	}
+	return values, nil
+}
+
+type mapValues map[string][]string
+
+func (m mapValues) Get(key string) string {
+	values := m[key]
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {

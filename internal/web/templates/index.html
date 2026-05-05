@@ -415,6 +415,7 @@
   </div>
   <script>
     const cards = Array.from(document.querySelectorAll(".card[data-issue]"));
+    const standaloneSession = "{{ .StandaloneSession }}";
     const backdrop = document.getElementById("dispatchBackdrop");
     const form = document.getElementById("dispatchForm");
     const title = document.getElementById("dispatchTitle");
@@ -426,6 +427,35 @@
     const confirmButton = document.getElementById("confirmDispatch");
     let selected = cards[0] || null;
     let confirmDuplicate = false;
+
+    function startStandaloneSessionHeartbeat() {
+      if (!standaloneSession) return;
+
+      const payload = JSON.stringify({ session: standaloneSession });
+      const sendHeartbeat = () => {
+        fetch("/api/standalone/heartbeat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload
+        }).catch(() => {});
+      };
+
+      sendHeartbeat();
+      const timer = setInterval(sendHeartbeat, 2000);
+      window.addEventListener("beforeunload", () => {
+        clearInterval(timer);
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon("/api/standalone/close", payload);
+          return;
+        }
+        fetch("/api/standalone/close", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+          keepalive: true
+        }).catch(() => {});
+      });
+    }
 
     function selectCard(card) {
       if (!card) return;
@@ -480,6 +510,7 @@
       });
     });
     selectCard(selected);
+    startStandaloneSessionHeartbeat();
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "d" && !backdrop.classList.contains("open")) {

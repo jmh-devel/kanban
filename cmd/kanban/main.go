@@ -1,22 +1,28 @@
 package main
 
 import (
-"context"
-"encoding/json"
-"flag"
-"fmt"
-"os"
-"strconv"
-"strings"
-"time"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
 
-"github.com/jmh-devel/kanban/internal/app"
-ghclient "github.com/jmh-devel/kanban/internal/github"
-"github.com/jmh-devel/kanban/internal/initcmd"
-"github.com/jmh-devel/kanban/internal/repo"
-"github.com/jmh-devel/kanban/internal/state"
-"github.com/jmh-devel/kanban/internal/tui"
-"github.com/jmh-devel/kanban/internal/web"
+	"github.com/jmh-devel/kanban/internal/app"
+	ghclient "github.com/jmh-devel/kanban/internal/github"
+	"github.com/jmh-devel/kanban/internal/initcmd"
+	"github.com/jmh-devel/kanban/internal/repo"
+	"github.com/jmh-devel/kanban/internal/state"
+	"github.com/jmh-devel/kanban/internal/tui"
+	"github.com/jmh-devel/kanban/internal/web"
 )
 
 var version = "dev"
@@ -45,6 +51,8 @@ func run(args []string) int {
 		return runTUI(args)
 	case "serve":
 		return runServe(args)
+	case "open":
+		return runOpen(args)
 	case "move":
 		return runMove(args)
 	case "config":
@@ -286,16 +294,73 @@ func runServe(args []string) int {
 	}
 
 	server, err := web.NewServer(func(ctx context.Context) (ghclient.Board, error) {
-return loadBoard(ctx, *repoPath, *repoSlug, ghclient.BoardOptions{
-DoneWindowDays:   *doneWindowDays,
-GroupByMilestone: *groupByMilestone,
-})
-})
+		return loadBoard(ctx, *repoPath, *repoSlug, ghclient.BoardOptions{
+			DoneWindowDays:   *doneWindowDays,
+			GroupByMilestone: *groupByMilestone,
+		})
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	if err := server.Serve(*addr); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func runOpen(args []string) int {
+	fs := flag.NewFlagSet("open", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repoSlug := fs.String("repo", "", "explicit GitHub repo slug (owner/repo)")
+	repoPath := fs.String("path", ".", "path inside the target git repository")
+	doneWindowDays := fs.Int("done-window-days", ghclient.DefaultDoneDays, "days of closed issues to show in Done")
+	groupByMilestone := fs.Bool("group-by-milestone", false, "preserve milestone grouping metadata within lanes")
+	idleTimeout := fs.Duration("idle-timeout", 10*time.Second, "how long after browser close/idle to stop standalone server")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	addr, err := findFreeAddr()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	session := newStandaloneSessionID()
+	url := "http://" + addr
+
+	server, err := web.NewServer(func(ctx context.Context) (ghclient.Board, error) {
+		return loadBoard(ctx, *repoPath, *repoSlug, ghclient.BoardOptions{
+			DoneWindowDays:   *doneWindowDays,
+			GroupByMilestone: *groupByMilestone,
+		})
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ServeStandalone(addr, session, *idleTimeout)
+	}()
+
+	if err := waitForHealth(url, 3*time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "standalone server did not start: %v\n", err)
+		return 1
+	}
+
+	if err := openSystemBrowser(url); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to open browser: %v\n", err)
+		fmt.Fprintf(os.Stderr, "open manually: %s\n", url)
+		_ = notifyStandaloneClose(url, session)
+		<-errCh
+		return 1
+	}
+
+	fmt.Fprintf(os.Stdout, "Opened %s\n", url)
+	if err := <-errCh; err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -439,6 +504,7 @@ func printUsage() {
 Usage:
 	kanban init [--path DIR] [--owner ORG] [--name REPO] [--remote NAME] [--visibility public|private] [--apply] [--setup-labels]
 	kanban tui [--path DIR] [--repo owner/repo] [--addr HOST:PORT]
+	kanban open [--path DIR] [--repo owner/repo] [--idle-timeout 10s]
   kanban [print] [--path DIR] [--repo owner/repo] [--done-window-days N]
   kanban json [--path DIR] [--repo owner/repo] [--done-window-days N]
   kanban serve [--addr HOST:PORT] [--path DIR] [--repo owner/repo] [--done-window-days N]
@@ -453,9 +519,74 @@ Behavior:
 	- init is dry-run by default and prints the gh publish command it would run
 	- init --setup-labels creates kanban:in-progress and kanban:review when missing
 	- init derives --owner from the existing git remote when available
+	- open starts a temporary local web UI, launches your browser, and exits when the window closes
   - defaults to the git repository under the current working directory
   - resolves the GitHub slug from remote.origin.url unless --repo is provided
   - uses GitHub labels as the source of truth for board lanes`)
+}
+
+func findFreeAddr() (string, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", fmt.Errorf("find free port: %w", err)
+	}
+	defer listener.Close()
+	return listener.Addr().String(), nil
+}
+
+func newStandaloneSessionID() string {
+	bytes := make([]byte, 8)
+	if _, err := rand.Read(bytes); err != nil {
+		return fmt.Sprintf("fallback-%d", time.Now().UTC().UnixNano())
+	}
+	return hex.EncodeToString(bytes)
+}
+
+func waitForHealth(baseURL string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(baseURL + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("health check timeout after %s", timeout)
+}
+
+func notifyStandaloneClose(baseURL string, session string) error {
+	body := strings.NewReader(fmt.Sprintf(`{"session":"%s"}`, session))
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/api/standalone/close", body)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	return nil
+}
+
+func openSystemBrowser(url string) error {
+	var command string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		command = "open"
+		args = []string{url}
+	case "windows":
+		command = "rundll32"
+		args = []string{"url.dll,FileProtocolHandler", url}
+	default:
+		command = "xdg-open"
+		args = []string{url}
+	}
+	return exec.Command(command, args...).Start()
 }
 
 func isTerminal(file *os.File) bool {

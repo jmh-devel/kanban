@@ -24,9 +24,11 @@ import (
 var templateFS embed.FS
 
 type Loader func(context.Context) (github.Board, error)
+type Mover func(context.Context, string, int, github.Lane) error
 
 type Server struct {
 	loader     Loader
+	mover      Mover
 	tmpl       *template.Template
 	standalone *standaloneTracker
 }
@@ -81,11 +83,18 @@ func (s *standaloneTracker) ShouldShutdown(now time.Time) bool {
 }
 
 func NewServer(loader Loader) (*Server, error) {
-	tmpl, err := template.ParseFS(templateFS, "templates/index.html")
+	tmpl, err := template.New("index.html").Funcs(template.FuncMap{
+		"json": templateJSON,
+	}).ParseFS(templateFS, "templates/index.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse template: %w", err)
 	}
-	return &Server{loader: loader, tmpl: tmpl}, nil
+	client := github.NewClient()
+	return &Server{
+		loader: loader,
+		mover:  client.MoveIssue,
+		tmpl:   tmpl,
+	}, nil
 }
 
 func (s *Server) Serve(addr string) error {
@@ -143,17 +152,66 @@ func (s *Server) ServeStandalone(addr string, session string, idleTimeout time.D
 
 func (s *Server) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", s.handleIndex)
-	mux.HandleFunc("GET /api/board", s.handleBoard)
-	mux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
-	mux.HandleFunc("POST /api/dispatch", s.handleDispatch)
-	mux.HandleFunc("POST /api/standalone/heartbeat", s.handleStandaloneHeartbeat)
-	mux.HandleFunc("POST /api/standalone/close", s.handleStandaloneClose)
-	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/api/board", s.handleBoard)
+	mux.HandleFunc("/api/issues/move", s.handleIssueMove)
+	mux.HandleFunc("/api/dispatch/options", s.handleDispatchOptions)
+	mux.HandleFunc("/api/dispatch", s.handleDispatch)
+	mux.HandleFunc("/api/standalone/heartbeat", s.handleStandaloneHeartbeat)
+	mux.HandleFunc("/api/standalone/close", s.handleStandaloneClose)
+	mux.HandleFunc("/healthz", s.handleHealth)
 	return mux
 }
 
+func (s *Server) handleIssueMove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		Issue int    `json:"issue"`
+		Lane  string `json:"lane"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	lane, err := parseLane(request.Lane)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	board, err := s.loader(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if strings.TrimSpace(board.Repo.Slug) == "" {
+		http.Error(w, "board repo slug is required", http.StatusBadRequest)
+		return
+	}
+	mover := s.mover
+	if mover == nil {
+		client := github.NewClient()
+		mover = client.MoveIssue
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := mover(ctx, board.Repo.Slug, request.Issue, lane); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"issue": request.Issue,
+		"lane":  lane,
+	})
+}
+
 func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	board, err := s.loader(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -198,6 +256,10 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var request struct {
 		Issue            int    `json:"issue"`
 		Runner           string `json:"runner"`
@@ -236,6 +298,10 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	board, err := s.loader(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -257,6 +323,10 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStandaloneHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.standalone == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -270,6 +340,10 @@ func (s *Server) handleStandaloneHeartbeat(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleStandaloneClose(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.standalone == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -341,6 +415,10 @@ func (m mapValues) Get(key string) string {
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	board, err := s.loader(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -352,7 +430,11 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	_ = encoder.Encode(board)
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok\n"))
 }
@@ -362,6 +444,32 @@ func writeJSON(w http.ResponseWriter, value any) {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	_ = encoder.Encode(value)
+}
+
+func templateJSON(value any) template.JS {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "null"
+	}
+	return template.JS(data)
+}
+
+func parseLane(input string) (github.Lane, error) {
+	lane := strings.ToLower(strings.TrimSpace(input))
+	lane = strings.ReplaceAll(lane, "_", "-")
+	lane = strings.ReplaceAll(lane, " ", "-")
+	switch lane {
+	case "backlog":
+		return github.LaneBacklog, nil
+	case "in-progress", "progress", "inprogress":
+		return github.LaneInProgress, nil
+	case "review":
+		return github.LaneReview, nil
+	case "done":
+		return github.LaneDone, nil
+	default:
+		return "", fmt.Errorf("unknown lane %q, expected backlog, in-progress, review, or done", input)
+	}
 }
 
 func requestLogger(next http.Handler) http.Handler {

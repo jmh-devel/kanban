@@ -74,11 +74,31 @@
       padding: 16px 20px 28px;
     }
 
+    .board-shell {
+      position: relative;
+    }
+
     .board {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       gap: 18px;
       align-items: start;
+      position: relative;
+      z-index: 1;
+    }
+
+    .flow-lines {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: visible;
+      z-index: 2;
+    }
+
+    .flow-lines path {
+      fill: none;
+      stroke: rgba(49, 65, 76, 0.42);
+      stroke-width: 2;
     }
 
     .column {
@@ -87,6 +107,11 @@
       border-radius: 20px;
       box-shadow: var(--shadow);
       overflow: hidden;
+    }
+
+    .column.drag-over {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(196, 91, 45, 0.18), var(--shadow);
     }
 
     .column-header {
@@ -141,6 +166,9 @@
       text-decoration: none;
       color: inherit;
       box-shadow: 0 6px 18px rgba(37, 29, 19, 0.06);
+      cursor: grab;
+      display: block;
+      position: relative;
     }
 
     .card:hover {
@@ -151,6 +179,17 @@
     .card.selected {
       outline: 3px solid rgba(196, 91, 45, 0.25);
       border-color: var(--accent);
+    }
+
+    .card.dragging {
+      opacity: 0.55;
+    }
+
+    .card-actions {
+      margin-top: 12px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
     .issue-number {
@@ -230,6 +269,8 @@
       border-radius: 8px;
       box-shadow: var(--shadow);
       padding: 18px;
+      max-height: min(760px, 92vh);
+      overflow: auto;
     }
 
     .modal h2 {
@@ -297,6 +338,52 @@
       min-height: 1.2rem;
     }
 
+    .detail-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .detail-meta {
+      display: grid;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .detail-body {
+      white-space: pre-wrap;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      max-height: 280px;
+      overflow: auto;
+      font-size: 0.92rem;
+      line-height: 1.45;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(420px, calc(100vw - 36px));
+      background: var(--ink);
+      color: white;
+      border-radius: 8px;
+      padding: 11px 13px;
+      box-shadow: var(--shadow);
+      display: none;
+      z-index: 20;
+    }
+
+    .toast.open {
+      display: block;
+    }
+
+    .toast.error {
+      background: #8a1f2d;
+    }
+
     @media (max-width: 700px) {
       header {
         padding: 20px 16px 8px;
@@ -327,9 +414,12 @@
     </div>
   </header>
   <main>
-    <section class="board">
+    <div class="board-shell" id="boardShell">
+      <svg class="flow-lines" id="flowLines" aria-hidden="true"></svg>
+      <section class="board" id="board">
       {{ range .Sections }}
-      <article class="column">
+      {{ $lane := .Title }}
+      <article class="column" data-lane="{{ .Title }}">
         <div class="column-header">
           <h2 class="column-title">
             <span>{{ .Title }}</span>
@@ -343,9 +433,15 @@
           <div class="subsection">
             <h3 class="subsection-title">{{ .Title }}</h3>
             {{ range .Issues }}
-            <a class="card" href="{{ .URL }}">
+            <article class="card" tabindex="0" draggable="true" data-issue="{{ .Number }}" data-title="{{ .Title }}" data-lane="{{ $lane }}">
               <div class="issue-number">#{{ .Number }}</div>
               <p class="issue-title">{{ .Title }}</p>
+              {{ if .Agent }}
+              <div class="agent-status">
+                <span class="agent-dot {{ .Agent.Status }}">{{ if eq .Agent.Status "completed" }}○{{ else }}●{{ end }}</span>
+                <span>{{ .Agent.Runner }} · {{ .Agent.Mode }} · {{ .Agent.Status }}</span>
+              </div>
+              {{ end }}
               {{ if .Labels }}
               <div class="labels">
                 {{ range .Labels }}
@@ -353,13 +449,17 @@
                 {{ end }}
               </div>
               {{ end }}
-            </a>
+              <div class="card-actions">
+                <button class="secondary" type="button" data-card-action="details">Details</button>
+                <button class="secondary" type="button" data-card-action="github">GitHub</button>
+              </div>
+            </article>
             {{ end }}
           </div>
           {{ end }}
           {{ else }}
           {{ range .Issues }}
-          <a class="card" href="{{ .URL }}" data-issue="{{ .Number }}" data-title="{{ .Title }}">
+          <article class="card" tabindex="0" draggable="true" data-issue="{{ .Number }}" data-title="{{ .Title }}" data-lane="{{ $lane }}">
             <div class="issue-number">#{{ .Number }}</div>
             <p class="issue-title">{{ .Title }}</p>
             {{ if .Agent }}
@@ -375,17 +475,49 @@
               {{ end }}
             </div>
             {{ end }}
-          </a>
+            <div class="card-actions">
+              <button class="secondary" type="button" data-card-action="details">Details</button>
+              <button class="secondary" type="button" data-card-action="github">GitHub</button>
+            </div>
+          </article>
           {{ end }}
           {{ end }}
           {{ else }}
-          <div class="empty">No open issues.</div>
+          <div class="empty">No issues.</div>
           {{ end }}
         </div>
       </article>
       {{ end }}
-    </section>
+      </section>
+    </div>
   </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="modal-backdrop" id="detailBackdrop">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+      <h2 id="detailTitle">Issue</h2>
+      <div class="detail-grid">
+        <div class="detail-meta" id="detailMeta"></div>
+        <div class="labels" id="detailLabels"></div>
+        <div class="field">
+          <label for="detailLane">Lane</label>
+          <select id="detailLane">
+            <option value="backlog">Backlog</option>
+            <option value="in-progress">In Progress</option>
+            <option value="review">Review</option>
+            <option value="done">Done</option>
+          </select>
+        </div>
+        <div class="detail-body" id="detailBody"></div>
+      </div>
+      <div class="modal-actions">
+        <a class="button secondary" id="detailGitHub" href="#">GitHub</a>
+        <button class="secondary" type="button" id="detailDispatch">Dispatch</button>
+        <button class="secondary" type="button" id="detailClose">Close</button>
+        <button type="button" id="detailMove">Move</button>
+      </div>
+      <div class="message" id="detailMessage"></div>
+    </section>
+  </div>
   <div class="modal-backdrop" id="dispatchBackdrop">
     <form class="modal" id="dispatchForm">
       <h2 id="dispatchTitle">Dispatch</h2>
@@ -414,7 +546,12 @@
     </form>
   </div>
   <script>
+    const boardData = {{ json .Board }};
     const cards = Array.from(document.querySelectorAll(".card[data-issue]"));
+    const boardShell = document.getElementById("boardShell");
+    const flowLines = document.getElementById("flowLines");
+    const columns = Array.from(document.querySelectorAll(".column[data-lane]"));
+    const toast = document.getElementById("toast");
     const standaloneSession = "{{ .StandaloneSession }}";
     const backdrop = document.getElementById("dispatchBackdrop");
     const form = document.getElementById("dispatchForm");
@@ -425,8 +562,45 @@
     const preview = document.getElementById("commandPreview");
     const message = document.getElementById("dispatchMessage");
     const confirmButton = document.getElementById("confirmDispatch");
+    const detailBackdrop = document.getElementById("detailBackdrop");
+    const detailTitle = document.getElementById("detailTitle");
+    const detailMeta = document.getElementById("detailMeta");
+    const detailLabels = document.getElementById("detailLabels");
+    const detailLane = document.getElementById("detailLane");
+    const detailBody = document.getElementById("detailBody");
+    const detailGitHub = document.getElementById("detailGitHub");
+    const detailMessage = document.getElementById("detailMessage");
     let selected = cards[0] || null;
+    let detailIssue = null;
     let confirmDuplicate = false;
+    let draggedCard = null;
+    let toastTimer = 0;
+    const laneValues = {
+      "Backlog": "backlog",
+      "In Progress": "in-progress",
+      "Review": "review",
+      "Done": "done"
+    };
+
+    function flattenIssues(board) {
+      const issues = [];
+      (board.sections || []).forEach((section) => {
+        const lane = section.title;
+        (section.issues || []).forEach((issue) => issues.push({ ...issue, lane }));
+      });
+      return issues;
+    }
+
+    const issues = flattenIssues(boardData);
+    const issueByNumber = new Map(issues.map((issue) => [Number(issue.number), issue]));
+
+    function showToast(text, isError = false) {
+      clearTimeout(toastTimer);
+      toast.textContent = text;
+      toast.classList.toggle("error", isError);
+      toast.classList.add("open");
+      toastTimer = setTimeout(() => toast.classList.remove("open"), 4200);
+    }
 
     function startStandaloneSessionHeartbeat() {
       if (!standaloneSession) return;
@@ -475,6 +649,55 @@
       });
     }
 
+    function labelsText(issue) {
+      return (issue.labels || []).map((label) => label.name).join(", ") || "None";
+    }
+
+    function assigneesText(issue) {
+      return (issue.assignees || []).map((assignee) => `@${assignee.login}`).join(", ") || "Unassigned";
+    }
+
+    function milestoneText(issue) {
+      return issue.milestone && issue.milestone.title ? issue.milestone.title : "None";
+    }
+
+    function agentText(issue) {
+      if (!issue.agent) return "No active dispatch";
+      return `${issue.agent.runner} / ${issue.agent.mode} / ${issue.agent.status}`;
+    }
+
+    function openDetails(card) {
+      const issue = issueByNumber.get(Number(card.dataset.issue));
+      if (!issue) return;
+      selectCard(card);
+      detailIssue = issue;
+      detailTitle.textContent = `#${issue.number} ${issue.title}`;
+      detailMeta.textContent = "";
+      [
+        `Lane: ${card.dataset.lane || issue.lane}`,
+        `Assignees: ${assigneesText(issue)}`,
+        `Milestone: ${milestoneText(issue)}`,
+        `Labels: ${labelsText(issue)}`,
+        `Dispatch: ${agentText(issue)}`
+      ].forEach((line) => {
+        const item = document.createElement("div");
+        item.textContent = line;
+        detailMeta.appendChild(item);
+      });
+      detailLabels.textContent = "";
+      (issue.labels || []).forEach((label) => {
+        const pill = document.createElement("span");
+        pill.className = "label";
+        pill.textContent = label.name;
+        detailLabels.appendChild(pill);
+      });
+      detailBody.textContent = issue.body || "No issue body.";
+      detailLane.value = laneValues[card.dataset.lane || issue.lane] || "backlog";
+      detailGitHub.href = issue.url || "#";
+      detailMessage.textContent = "";
+      detailBackdrop.classList.add("open");
+    }
+
     async function openDispatch() {
       if (!selected) return;
       confirmDuplicate = false;
@@ -507,10 +730,55 @@
         if (event.metaKey || event.ctrlKey) return;
         event.preventDefault();
         selectCard(card);
+        if (event.target.closest("[data-card-action='github']")) {
+          const issue = issueByNumber.get(Number(card.dataset.issue));
+          if (issue && issue.url) window.open(issue.url, "_blank", "noopener");
+          return;
+        }
+        openDetails(card);
+      });
+      card.addEventListener("dragstart", (event) => {
+        draggedCard = card;
+        selectCard(card);
+        card.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", card.dataset.issue);
+      });
+      card.addEventListener("dragend", () => {
+        card.classList.remove("dragging");
+        draggedCard = null;
+        columns.forEach((column) => column.classList.remove("drag-over"));
+        renderFlowLines();
+      });
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          openDetails(card);
+        }
       });
     });
+
+    columns.forEach((column) => {
+      column.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        column.classList.add("drag-over");
+      });
+      column.addEventListener("dragleave", (event) => {
+        if (!column.contains(event.relatedTarget)) {
+          column.classList.remove("drag-over");
+        }
+      });
+      column.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        column.classList.remove("drag-over");
+        if (!draggedCard) return;
+        await moveCard(draggedCard, laneValues[column.dataset.lane], column);
+      });
+    });
+
     selectCard(selected);
     startStandaloneSessionHeartbeat();
+    renderFlowLines();
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "d" && !backdrop.classList.contains("open")) {
@@ -519,7 +787,23 @@
       }
       if (event.key === "Escape") {
         backdrop.classList.remove("open");
+        detailBackdrop.classList.remove("open");
       }
+    });
+
+    document.getElementById("detailClose").addEventListener("click", () => {
+      detailBackdrop.classList.remove("open");
+    });
+
+    document.getElementById("detailDispatch").addEventListener("click", () => {
+      detailBackdrop.classList.remove("open");
+      openDispatch();
+    });
+
+    document.getElementById("detailMove").addEventListener("click", async () => {
+      if (!selected || !detailIssue) return;
+      const targetColumn = columns.find((column) => laneValues[column.dataset.lane] === detailLane.value);
+      await moveCard(selected, detailLane.value, targetColumn, detailMessage);
     });
 
     document.getElementById("cancelDispatch").addEventListener("click", () => {
@@ -564,6 +848,92 @@
       }
       message.textContent = (await response.text()).trim();
     });
+
+    async function moveCard(card, lane, targetColumn, statusNode = null) {
+      if (!lane || !targetColumn || laneValues[card.dataset.lane] === lane) return;
+      const sourceParent = card.parentElement;
+      const sourceNext = card.nextElementSibling;
+      const issue = Number(card.dataset.issue);
+      const targetCards = targetColumn.querySelector(".cards");
+      targetCards.appendChild(card);
+      const oldLane = card.dataset.lane;
+      card.dataset.lane = targetColumn.dataset.lane;
+      if (statusNode) statusNode.textContent = "Moving...";
+      renderFlowLines();
+
+      const response = await fetch("/api/issues/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issue, lane })
+      });
+      if (response.ok) {
+        const text = `Moved #${issue} to ${targetColumn.dataset.lane}.`;
+        if (statusNode) statusNode.textContent = text;
+        showToast(text);
+        window.setTimeout(() => window.location.reload(), 350);
+        return;
+      }
+
+      if (sourceNext) {
+        sourceParent.insertBefore(card, sourceNext);
+      } else {
+        sourceParent.appendChild(card);
+      }
+      card.dataset.lane = oldLane;
+      const error = (await response.text()).trim() || "Move failed.";
+      if (statusNode) statusNode.textContent = error;
+      showToast(error, true);
+      renderFlowLines();
+    }
+
+    function relationshipLinks() {
+      const links = [];
+      const pattern = /\b(blocks|blocked by|depends on|depends-on|related to|relates to|linked to)\s+#(\d+)/gi;
+      issues.forEach((issue) => {
+        let match;
+        while ((match = pattern.exec(issue.body || "")) !== null) {
+          const target = Number(match[2]);
+          if (issueByNumber.has(target)) {
+            links.push({ from: Number(issue.number), to: target, type: match[1].toLowerCase() });
+          }
+        }
+      });
+      return links;
+    }
+
+    function renderFlowLines() {
+      window.requestAnimationFrame(() => {
+        const shellBox = boardShell.getBoundingClientRect();
+        flowLines.setAttribute("width", boardShell.scrollWidth);
+        flowLines.setAttribute("height", boardShell.scrollHeight);
+        flowLines.setAttribute("viewBox", `0 0 ${boardShell.scrollWidth} ${boardShell.scrollHeight}`);
+        flowLines.textContent = "";
+        relationshipLinks().forEach((link) => {
+          const from = document.querySelector(`.card[data-issue="${link.from}"]`);
+          const to = document.querySelector(`.card[data-issue="${link.to}"]`);
+          if (!from || !to) return;
+          const a = from.getBoundingClientRect();
+          const b = to.getBoundingClientRect();
+          const x1 = a.right - shellBox.left + window.scrollX - window.scrollX;
+          const y1 = a.top + a.height / 2 - shellBox.top;
+          const x2 = b.left - shellBox.left;
+          const y2 = b.top + b.height / 2 - shellBox.top;
+          const curve = Math.max(36, Math.abs(x2 - x1) * 0.35);
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", `M ${x1} ${y1} C ${x1 + curve} ${y1}, ${x2 - curve} ${y2}, ${x2} ${y2}`);
+          path.setAttribute("marker-end", "url(#arrow)");
+          flowLines.appendChild(path);
+        });
+        if (!flowLines.querySelector("defs")) {
+          const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+          defs.innerHTML = '<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(49, 65, 76, 0.42)"></path></marker>';
+          flowLines.prepend(defs);
+        }
+      });
+    }
+
+    window.addEventListener("resize", renderFlowLines);
+    window.addEventListener("scroll", renderFlowLines, { passive: true });
   </script>
 </body>
 

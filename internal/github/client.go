@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jmh-devel/kanban/internal/repo"
+	"github.com/jmh-devel/kanban/internal/state"
 )
 
 type Label struct {
@@ -40,6 +41,14 @@ type Issue struct {
 	URL       string        `json:"url"`
 	Labels    []Label       `json:"labels"`
 	Milestone *MilestoneRef `json:"milestone,omitempty"`
+	Agent     *AgentStatus  `json:"agent,omitempty"`
+}
+
+type AgentStatus struct {
+	Runner       string    `json:"runner"`
+	Mode         string    `json:"mode"`
+	Status       string    `json:"status"`
+	DispatchedAt time.Time `json:"dispatched_at"`
 }
 
 type Section struct {
@@ -69,6 +78,11 @@ func (c *Client) LoadBoard(ctx context.Context, details repo.Details) (Board, er
 	if err != nil {
 		return Board{}, err
 	}
+	dispatches, err := state.LoadDispatches()
+	if err != nil {
+		return Board{}, err
+	}
+	attachDispatches(issues, state.ActiveDispatchesByIssue(dispatches, details.Slug))
 
 	sections := buildSections(milestones, issues)
 	return Board{
@@ -76,6 +90,21 @@ func (c *Client) LoadBoard(ctx context.Context, details repo.Details) (Board, er
 		Sections:  sections,
 		UpdatedAt: time.Now().UTC(),
 	}, nil
+}
+
+func attachDispatches(issues []Issue, dispatches map[int]state.Dispatch) {
+	for i := range issues {
+		dispatch, ok := dispatches[issues[i].Number]
+		if !ok {
+			continue
+		}
+		issues[i].Agent = &AgentStatus{
+			Runner:       dispatch.Runner,
+			Mode:         dispatch.Mode,
+			Status:       dispatch.Status,
+			DispatchedAt: dispatch.DispatchedAt,
+		}
+	}
 }
 
 func buildSections(milestones []Milestone, issues []Issue) []Section {

@@ -53,6 +53,9 @@ kanban serve
 kanban open
 kanban move 123 review
 kanban config show
+kanban config runners
+kanban config set-repo-key --repo-key solarops.us
+kanban config set-runner --runner tsctl --mode implement
 
 # Override repo autodetection
 kanban print --repo jmh-devel/solarops.us
@@ -84,6 +87,37 @@ kanban serve --addr 127.0.0.1:3584
 ```
 
 Then open `http://127.0.0.1:3584`.
+
+## TUI
+
+`kanban tui` opens an interactive board. Use `j/k` to move between cards,
+`h/l` or `Tab` to change lanes, `Enter` to expand a card, `d` to dispatch an
+issue to an agent, `m` to move lanes, `o` to open the issue in a browser, and
+`r` to refresh.
+
+In narrow terminals, `Enter` opens a plain detail view so the expand action is
+still visible even when the full board layout falls back to text rendering.
+
+## Agent dispatch
+
+Both the web UI and TUI dispatch through the same backend path. The dispatch
+picker uses configured runners from `kanban config runners` plus `manual`, and
+uses per-repo defaults from:
+
+```bash
+kanban config set-repo-key --repo-key solarops.us
+kanban config set-runner --runner tsctl --mode implement
+```
+
+For `tsctl` runners, dispatch executes commands like:
+
+```bash
+tsctl agent dispatch solarops.us --runner tsctl --issue 318 --mode implement
+```
+
+Manual dispatch records the generated command without executing it. If an issue
+already has an active dispatch, the TUI and web UI require a second confirmation
+before recording a replacement dispatch.
 
 ## Development
 

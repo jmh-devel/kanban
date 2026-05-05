@@ -86,7 +86,7 @@ func LoadConfig() (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return defaultConfig(), nil
+			return DefaultConfig(), nil
 		}
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
@@ -146,7 +146,7 @@ func (c Config) AutoMoveOnDispatch() bool {
 	return *c.Agent.AutoMoveOnDispatch
 }
 
-func defaultConfig() Config {
+func DefaultConfig() Config {
 	autoMove := true
 	autoComplete := false
 	config := Config{

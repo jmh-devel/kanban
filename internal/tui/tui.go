@@ -13,8 +13,10 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jmh-devel/kanban/internal/agent"
 	"github.com/jmh-devel/kanban/internal/app"
 	"github.com/jmh-devel/kanban/internal/github"
+	"github.com/jmh-devel/kanban/internal/state"
 )
 
 const (
@@ -28,12 +30,14 @@ var laneNames = []string{laneBacklog, laneInProgress, laneReview, laneDone}
 
 type Loader func(context.Context) (github.Board, error)
 type Mover func(context.Context, github.Issue, string) error
+type DispatchFunc func(context.Context, state.Config, agent.Request) (agent.Result, error)
 
 type Options struct {
-	Loader Loader
-	Mover  Mover
-	Stdout *os.File
-	Stderr *os.File
+	Loader     Loader
+	Mover      Mover
+	Dispatcher DispatchFunc
+	Stdout     *os.File
+	Stderr     *os.File
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -51,8 +55,16 @@ func Run(ctx context.Context, options Options) error {
 	if err != nil {
 		return err
 	}
+	config, err := state.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if options.Dispatcher == nil {
+		dispatcher := agent.NewDispatcher()
+		options.Dispatcher = dispatcher.Dispatch
+	}
 
-	model := newModel(board, options.Loader, options.Mover)
+	model := newModelWithConfig(board, options.Loader, options.Mover, options.Dispatcher, config)
 	program := tea.NewProgram(model, tea.WithOutput(options.Stdout), tea.WithAltScreen())
 	_, err = program.Run()
 	return err
@@ -63,6 +75,8 @@ type model struct {
 	columns     []column
 	loader      Loader
 	mover       Mover
+	dispatcher  DispatchFunc
+	config      state.Config
 	width       int
 	height      int
 	focusColumn int
@@ -94,8 +108,10 @@ type column struct {
 }
 
 type dispatchState struct {
-	runnerIndex int
-	modeIndex   int
+	runnerIndex      int
+	modeIndex        int
+	confirmDuplicate bool
+	duplicate        *agent.Duplicate
 }
 
 type refreshMsg struct {
@@ -109,21 +125,36 @@ type moveMsg struct {
 	err   error
 }
 
+type dispatchMsg struct {
+	issue  github.Issue
+	result agent.Result
+	err    error
+}
+
 type tickMsg time.Time
 
 func newModel(board github.Board, loader Loader, mover Mover) model {
+	dispatcher := agent.NewDispatcher()
+	return newModelWithConfig(board, loader, mover, dispatcher.Dispatch, state.DefaultConfig())
+}
+
+func newModelWithConfig(board github.Board, loader Loader, mover Mover, dispatcher DispatchFunc, config state.Config) model {
 	columns := buildColumns(board)
-	return model{
+	m := model{
 		board:       board,
 		columns:     columns,
 		loader:      loader,
 		mover:       mover,
+		dispatcher:  dispatcher,
+		config:      config,
 		width:       120,
 		height:      32,
 		selected:    make([]int, len(columns)),
 		lastRefresh: board.UpdatedAt,
 		plain:       noColor(),
 	}
+	m.resetDispatch()
+	return m
 }
 
 func (m model) Init() tea.Cmd {
@@ -169,6 +200,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeBoard
 		m.flash(fmt.Sprintf("moved #%d to %s", msg.issue.Number, msg.lane))
 		return m, nil
+	case dispatchMsg:
+		if msg.err != nil {
+			m.flash("dispatch failed: " + msg.err.Error())
+			return m, nil
+		}
+		if msg.result.Duplicate != nil {
+			m.dispatch.confirmDuplicate = true
+			m.dispatch.duplicate = msg.result.Duplicate
+			m.flash(fmt.Sprintf("already dispatched to %s; press Enter again to re-dispatch", msg.result.Duplicate.Runner))
+			return m, nil
+		}
+		m.mode = modeBoard
+		m.board = applyDispatchLocal(m.board, msg.issue, msg.result)
+		m.columns = buildColumns(m.board)
+		m.clampSelection()
+		action := "dispatched"
+		if msg.result.Manual {
+			action = "manual command recorded"
+		}
+		m.flash(fmt.Sprintf("%s #%d", action, msg.issue.Number))
+		if m.loader == nil {
+			return m, nil
+		}
+		m.refreshing = true
+		return m, m.loadBoard()
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -214,20 +270,34 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case modeDispatch:
+		runners := m.dispatchRunners()
+		modes := dispatchModes()
 		switch key {
 		case "esc", "q":
 			m.mode = modeBoard
 		case "tab", "right", "l":
-			m.dispatch.runnerIndex = (m.dispatch.runnerIndex + 1) % len(dispatchRunners())
+			m.dispatch.runnerIndex = (m.dispatch.runnerIndex + 1) % len(runners)
+			m.dispatch.confirmDuplicate = false
+			m.dispatch.duplicate = nil
 		case "shift+tab", "left", "h":
-			m.dispatch.runnerIndex = (m.dispatch.runnerIndex + len(dispatchRunners()) - 1) % len(dispatchRunners())
+			m.dispatch.runnerIndex = (m.dispatch.runnerIndex + len(runners) - 1) % len(runners)
+			m.dispatch.confirmDuplicate = false
+			m.dispatch.duplicate = nil
 		case "j", "down":
-			m.dispatch.modeIndex = (m.dispatch.modeIndex + 1) % len(dispatchModes())
+			m.dispatch.modeIndex = (m.dispatch.modeIndex + 1) % len(modes)
+			m.dispatch.confirmDuplicate = false
+			m.dispatch.duplicate = nil
 		case "k", "up":
-			m.dispatch.modeIndex = (m.dispatch.modeIndex + len(dispatchModes()) - 1) % len(dispatchModes())
+			m.dispatch.modeIndex = (m.dispatch.modeIndex + len(modes) - 1) % len(modes)
+			m.dispatch.confirmDuplicate = false
+			m.dispatch.duplicate = nil
 		case "enter":
-			m.flash("dispatch command: " + m.dispatchCommand())
-			m.mode = modeBoard
+			issue, ok := m.currentIssue()
+			if !ok {
+				m.mode = modeBoard
+				return m, nil
+			}
+			return m, m.dispatchIssue(issue)
 		}
 		return m, nil
 	case modeHelp:
@@ -256,6 +326,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openExpand()
 	case "d":
 		if _, ok := m.currentIssue(); ok {
+			m.resetDispatch()
 			m.mode = modeDispatch
 		}
 	case "m":
@@ -285,7 +356,18 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	if m.width > 0 && m.width < 80 {
-		return app.RenderBoardText(m.board)
+		switch m.mode {
+		case modeExpand:
+			return m.renderNarrowExpand()
+		case modeMove:
+			return m.renderMove() + "\n"
+		case modeDispatch:
+			return m.renderDispatch() + "\n"
+		case modeHelp:
+			return m.renderHelp() + "\n"
+		default:
+			return m.renderNarrowBoard()
+		}
 	}
 
 	base := m.renderBoard()
@@ -371,6 +453,9 @@ func (m model) cardView(issue github.Issue, width int, selected bool) string {
 	if len(issue.Assignees) > 0 {
 		lines = append(lines, truncate("@"+issue.Assignees[0].Login, innerWidth))
 	}
+	if issue.Agent != nil {
+		lines = append(lines, truncate(agentLine(*issue.Agent, m.board.UpdatedAt), innerWidth))
+	}
 
 	border := lipgloss.RoundedBorder()
 	if m.plain {
@@ -389,7 +474,7 @@ func (m model) cardView(issue github.Issue, width int, selected bool) string {
 	return cardStyle.Render(strings.Join(lines, "\n"))
 }
 
-func (m model) openExpand() {
+func (m *model) openExpand() {
 	issue, ok := m.currentIssue()
 	if !ok {
 		return
@@ -404,6 +489,14 @@ func (m model) openExpand() {
 
 func (m model) renderExpand() string {
 	return modalStyle(m.plain, m.width).Render(m.expanded.View())
+}
+
+func (m model) renderNarrowExpand() string {
+	issue, ok := m.currentIssue()
+	if !ok {
+		return m.renderNarrowBoard()
+	}
+	return expandContent(issue) + "\n\n[Esc] back  [j/k] scroll\n"
 }
 
 func (m model) renderMove() string {
@@ -421,18 +514,28 @@ func (m model) renderMove() string {
 
 func (m model) renderDispatch() string {
 	issue, _ := m.currentIssue()
+	runners := m.dispatchRunners()
+	modes := dispatchModes()
+	command, commandErr := m.dispatchPreview()
 	lines := []string{
 		fmt.Sprintf("Dispatch #%d to agent", issue.Number),
 		"",
-		"Runner:   " + segmented(dispatchRunners(), m.dispatch.runnerIndex),
-		"Mode:     " + segmented(dispatchModes(), m.dispatch.modeIndex),
-		"Repo key: " + repoKey(m.board),
+		"Runner:   " + segmented(runners, m.dispatch.runnerIndex),
+		"Mode:     " + segmented(modes, m.dispatch.modeIndex),
+		"Repo key: " + repoKey(m.config, m.board),
 		"",
 		"Preview:",
-		"> " + m.dispatchCommand(),
-		"",
-		"[Enter] confirm   [Esc] cancel",
 	}
+	if commandErr != nil {
+		lines = append(lines, "! "+commandErr.Error())
+	} else {
+		lines = append(lines, "> "+command)
+	}
+	if m.dispatch.duplicate != nil {
+		lines = append(lines, "", fmt.Sprintf("Already dispatched to %s (%s).", m.dispatch.duplicate.Runner, m.dispatch.duplicate.Mode))
+		lines = append(lines, "Press Enter again to re-dispatch.")
+	}
+	lines = append(lines, "", "[Enter] confirm   [Esc] cancel")
 	return modalStyle(m.plain, m.width).Render(strings.Join(lines, "\n"))
 }
 
@@ -507,6 +610,26 @@ func (m model) moveIssue(issue github.Issue, lane string) tea.Cmd {
 		defer cancel()
 		err := m.mover(ctx, issue, lane)
 		return moveMsg{issue: issue, lane: lane, err: err}
+	}
+}
+
+func (m model) dispatchIssue(issue github.Issue) tea.Cmd {
+	return func() tea.Msg {
+		if m.dispatcher == nil {
+			return dispatchMsg{issue: issue, err: fmt.Errorf("tui dispatcher is required")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		runners := m.dispatchRunners()
+		modes := dispatchModes()
+		result, err := m.dispatcher(ctx, m.config, agent.Request{
+			Repo:             m.board.Repo.Slug,
+			Issue:            issue.Number,
+			Runner:           runners[m.dispatch.runnerIndex],
+			Mode:             modes[m.dispatch.modeIndex],
+			ConfirmDuplicate: m.dispatch.confirmDuplicate,
+		})
+		return dispatchMsg{issue: issue, result: result, err: err}
 	}
 }
 
@@ -682,31 +805,69 @@ func withoutLaneLabels(labels []github.Label) []github.Label {
 	return filtered
 }
 
-func (m model) dispatchCommand() string {
+func (m model) dispatchPreview() (string, error) {
 	issue, ok := m.currentIssue()
 	if !ok {
-		return ""
+		return "", nil
 	}
-	return buildDispatchCommand(m.board, issue.Number, dispatchRunners()[m.dispatch.runnerIndex], dispatchModes()[m.dispatch.modeIndex])
+	runners := m.dispatchRunners()
+	modes := dispatchModes()
+	return agent.Preview(m.config, m.board.Repo.Slug, issue.Number, runners[m.dispatch.runnerIndex], modes[m.dispatch.modeIndex])
 }
 
-func buildDispatchCommand(board github.Board, issueNumber int, runner string, mode string) string {
-	return fmt.Sprintf("tsctl agent dispatch %s --runner %s --issue %d --mode %s", repoKey(board), runner, issueNumber, mode)
+func buildDispatchCommand(config state.Config, board github.Board, issueNumber int, runner string, mode string) (string, error) {
+	return agent.Preview(config, board.Repo.Slug, issueNumber, runner, mode)
 }
 
-func dispatchRunners() []string {
-	return []string{"codex", "claude", "tsctl", "manual"}
+func (m model) dispatchRunners() []string {
+	runners := m.config.RunnerNames()
+	if len(runners) == 0 {
+		return []string{state.DefaultRunner}
+	}
+	return runners
 }
 
 func dispatchModes() []string {
-	return []string{"implement", "plan", "review"}
+	return []string{"implement", "plan", "review", "audit"}
 }
 
-func repoKey(board github.Board) string {
+func repoKey(config state.Config, board github.Board) string {
+	if repoConfig := config.Repos[board.Repo.Slug]; repoConfig.RepoKey != "" {
+		return repoConfig.RepoKey
+	}
 	if board.Repo.Name != "" {
 		return board.Repo.Name
 	}
 	return board.Repo.Slug
+}
+
+func (m *model) resetDispatch() {
+	runners := m.dispatchRunners()
+	modes := dispatchModes()
+	repoConfig := m.config.Repos[m.board.Repo.Slug]
+	defaultRunnerIndex := indexOrDefault(runners, state.DefaultRunner, 0)
+	m.dispatch = dispatchState{
+		runnerIndex: indexOrDefault(runners, firstNonEmpty(repoConfig.PreferredRunner, state.DefaultRunner), defaultRunnerIndex),
+		modeIndex:   indexOrDefault(modes, firstNonEmpty(repoConfig.PreferredMode, state.DefaultMode), 0),
+	}
+}
+
+func indexOrDefault(values []string, value string, fallback int) int {
+	for i, candidate := range values {
+		if candidate == value {
+			return i
+		}
+	}
+	return fallback
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func segmented(values []string, selected int) string {
@@ -723,6 +884,35 @@ func segmented(values []string, selected int) string {
 
 func overlay(_ string, modal string) string {
 	return modal + "\n"
+}
+
+func applyDispatchLocal(board github.Board, issue github.Issue, result agent.Result) github.Board {
+	status := &github.AgentStatus{
+		Runner:       result.Dispatch.Runner,
+		Mode:         result.Dispatch.Mode,
+		Status:       result.Dispatch.Status,
+		DispatchedAt: result.Dispatch.DispatchedAt,
+	}
+	update := func(issues []github.Issue) {
+		for i := range issues {
+			if issues[i].Number == issue.Number {
+				issues[i].Agent = status
+			}
+		}
+	}
+	for i := range board.Sections {
+		update(board.Sections[i].Issues)
+	}
+	update(board.ClosedIssues)
+	return board
+}
+
+func agentLine(status github.AgentStatus, now time.Time) string {
+	return fmt.Sprintf("* %s - %s - %s ago", status.Runner, status.Mode, durationAge(now.Sub(status.DispatchedAt)))
+}
+
+func (m model) renderNarrowBoard() string {
+	return strings.TrimSpace(app.RenderBoardText(m.board)) + "\n\n[j/k] navigate  [Enter] expand  [d] dispatch  [?] help\n"
 }
 
 func modalStyle(plain bool, terminalWidth int) lipgloss.Style {
@@ -813,7 +1003,13 @@ func since(t time.Time) string {
 	if t.IsZero() {
 		return "never"
 	}
-	d := time.Since(t)
+	return durationAge(time.Since(t))
+}
+
+func durationAge(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d.Seconds()))
 	}

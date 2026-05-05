@@ -35,6 +35,9 @@ func TestBuildCommandTsctlRequiresRepoKey(t *testing.T) {
 }
 
 func TestBuildCommandAutoDetectsReposFileFromWorkspace(t *testing.T) {
+	t.Setenv("KANBAN_REPOS_FILE", "")
+	t.Setenv("REPOS_FILE", "")
+
 	root := t.TempDir()
 	kanbanDir := filepath.Join(root, "kanban")
 	tsctlDir := filepath.Join(root, "tsctl")

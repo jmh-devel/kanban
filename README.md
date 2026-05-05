@@ -119,6 +119,17 @@ Manual dispatch records the generated command without executing it. If an issue
 already has an active dispatch, the TUI and web UI require a second confirmation
 before recording a replacement dispatch.
 
+If Enter in the TUI dispatch modal appears to do nothing:
+
+- ensure you are running the latest installed binary (`make install`)
+- configure a repo catalog path when required by your tsctl setup:
+
+```bash
+kanban config set-repo-key --repo-key kanban --repos-file /data/src/tacitsoft/infrastructure/tsctl/repos.yaml
+```
+
+You can also export `KANBAN_REPOS_FILE` as a fallback.
+
 ## Development
 
 ```bash

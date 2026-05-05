@@ -2,7 +2,10 @@ APP := kanban
 PKG := ./cmd/kanban
 BUILD_DIR := bin
 DEB_DIR := dist/deb
-DEB_VERSION ?= 0.1.0
+DEB_BASE_VERSION ?= 0.1.0
+DEB_BUILD_TIMESTAMP := $(shell date -u +%Y%m%d%H%M%S)
+DEB_BUILD_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo nogit)
+DEB_VERSION ?= $(DEB_BASE_VERSION)+$(DEB_BUILD_TIMESTAMP).$(DEB_BUILD_COMMIT)
 
 .PHONY: fmt fmt-check vet test build run check clean deb install
 

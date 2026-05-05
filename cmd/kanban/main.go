@@ -1,21 +1,22 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"flag"
-	"fmt"
-	"os"
-	"strconv"
-	"strings"
-	"time"
+"context"
+"encoding/json"
+"flag"
+"fmt"
+"os"
+"strconv"
+"strings"
+"time"
 
-	"github.com/jmh-devel/kanban/internal/app"
-	ghclient "github.com/jmh-devel/kanban/internal/github"
-	"github.com/jmh-devel/kanban/internal/initcmd"
-	"github.com/jmh-devel/kanban/internal/repo"
-	"github.com/jmh-devel/kanban/internal/tui"
-	"github.com/jmh-devel/kanban/internal/web"
+"github.com/jmh-devel/kanban/internal/app"
+ghclient "github.com/jmh-devel/kanban/internal/github"
+"github.com/jmh-devel/kanban/internal/initcmd"
+"github.com/jmh-devel/kanban/internal/repo"
+"github.com/jmh-devel/kanban/internal/state"
+"github.com/jmh-devel/kanban/internal/tui"
+"github.com/jmh-devel/kanban/internal/web"
 )
 
 var version = "dev"
@@ -46,6 +47,8 @@ func run(args []string) int {
 		return runServe(args)
 	case "move":
 		return runMove(args)
+	case "config":
+		return runConfig(args)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 		return 0
@@ -57,6 +60,145 @@ func run(args []string) int {
 		printUsage()
 		return 2
 	}
+}
+
+func runConfig(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "missing config command")
+		printConfigUsage()
+		return 2
+	}
+	command := args[0]
+	args = args[1:]
+
+	switch command {
+	case "set-repo-key":
+		return runConfigSetRepoKey(args)
+	case "set-runner":
+		return runConfigSetRunner(args)
+	case "runners":
+		return runConfigRunners(args)
+	case "show":
+		return runConfigShow(args)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown config command %q\n\n", command)
+		printConfigUsage()
+		return 2
+	}
+}
+
+func runConfigSetRepoKey(args []string) int {
+	fs := flag.NewFlagSet("config set-repo-key", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repoPath := fs.String("path", ".", "path inside the target git repository")
+	repoSlug := fs.String("repo", "", "explicit GitHub repo slug (owner/repo)")
+	repoKey := fs.String("repo-key", "", "tsctl repo key")
+	reposFile := fs.String("repos-file", "", "tsctl repos.yaml path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*repoKey) == "" {
+		fmt.Fprintln(os.Stderr, "--repo-key is required")
+		return 2
+	}
+	details, err := repo.Detect(context.Background(), *repoPath, *repoSlug)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	config, err := state.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	repoConfig := config.Repos[details.Slug]
+	repoConfig.RepoKey = *repoKey
+	repoConfig.ReposFile = *reposFile
+	config.Repos[details.Slug] = repoConfig
+	if err := state.SaveConfig(config); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("set repo key for %s to %s\n", details.Slug, *repoKey)
+	return 0
+}
+
+func runConfigSetRunner(args []string) int {
+	fs := flag.NewFlagSet("config set-runner", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repoPath := fs.String("path", ".", "path inside the target git repository")
+	repoSlug := fs.String("repo", "", "explicit GitHub repo slug (owner/repo)")
+	runner := fs.String("runner", "", "preferred runner")
+	mode := fs.String("mode", state.DefaultMode, "preferred mode")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*runner) == "" {
+		fmt.Fprintln(os.Stderr, "--runner is required")
+		return 2
+	}
+	details, err := repo.Detect(context.Background(), *repoPath, *repoSlug)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	config, err := state.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	repoConfig := config.Repos[details.Slug]
+	repoConfig.PreferredRunner = *runner
+	repoConfig.PreferredMode = *mode
+	config.Repos[details.Slug] = repoConfig
+	if err := state.SaveConfig(config); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("set preferred runner for %s to %s (%s)\n", details.Slug, *runner, *mode)
+	return 0
+}
+
+func runConfigRunners(args []string) int {
+	fs := flag.NewFlagSet("config runners", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	config, err := state.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	for _, name := range config.RunnerNames() {
+		runner := config.Runner(name)
+		kind := runner.Kind
+		if kind == "" {
+			kind = "local_cli"
+		}
+		fmt.Printf("%s\t%s\n", name, kind)
+	}
+	return 0
+}
+
+func runConfigShow(args []string) int {
+	fs := flag.NewFlagSet("config show", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	config, err := state.LoadConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(config); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
 }
 
 func runTUI(args []string) int {
@@ -144,11 +286,11 @@ func runServe(args []string) int {
 	}
 
 	server, err := web.NewServer(func(ctx context.Context) (ghclient.Board, error) {
-		return loadBoard(ctx, *repoPath, *repoSlug, ghclient.BoardOptions{
-			DoneWindowDays:   *doneWindowDays,
-			GroupByMilestone: *groupByMilestone,
-		})
-	})
+return loadBoard(ctx, *repoPath, *repoSlug, ghclient.BoardOptions{
+DoneWindowDays:   *doneWindowDays,
+GroupByMilestone: *groupByMilestone,
+})
+})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -301,6 +443,10 @@ Usage:
   kanban json [--path DIR] [--repo owner/repo] [--done-window-days N]
   kanban serve [--addr HOST:PORT] [--path DIR] [--repo owner/repo] [--done-window-days N]
   kanban move [--path DIR] [--repo owner/repo] ISSUE backlog|in-progress|review|done
+  kanban config set-repo-key --repo-key NAME [--repos-file PATH] [--path DIR] [--repo owner/repo]
+  kanban config set-runner --runner NAME [--mode implement|plan|review|audit] [--path DIR] [--repo owner/repo]
+  kanban config runners
+  kanban config show
   kanban version
 
 Behavior:
@@ -318,4 +464,12 @@ func isTerminal(file *os.File) bool {
 		return false
 	}
 	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func printConfigUsage() {
+	fmt.Println(`Usage:
+  kanban config set-repo-key --repo-key NAME [--repos-file PATH] [--path DIR] [--repo owner/repo]
+  kanban config set-runner --runner NAME [--mode implement|plan|review|audit] [--path DIR] [--repo owner/repo]
+  kanban config runners
+  kanban config show`)
 }

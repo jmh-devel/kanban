@@ -148,6 +148,11 @@
       transform: translateY(-1px);
     }
 
+    .card.selected {
+      outline: 3px solid rgba(196, 91, 45, 0.25);
+      border-color: var(--accent);
+    }
+
     .issue-number {
       color: var(--accent);
       font-weight: 700;
@@ -168,6 +173,28 @@
       gap: 8px;
     }
 
+    .agent-status {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 0.82rem;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .agent-dot {
+      color: #1f883d;
+      font-size: 0.9rem;
+    }
+
+    .agent-dot.failed {
+      color: #cf222e;
+    }
+
+    .agent-dot.completed {
+      color: var(--muted);
+    }
+
     .label {
       padding: 4px 8px;
       border-radius: 999px;
@@ -180,6 +207,94 @@
       color: var(--muted);
       font-style: italic;
       padding: 6px 2px;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(24, 33, 38, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal {
+      width: min(640px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+
+    .modal h2 {
+      margin: 0 0 16px;
+      font-size: 1.15rem;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .field label {
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    select,
+    input,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 10px;
+      font: inherit;
+      background: white;
+      color: var(--ink);
+    }
+
+    textarea {
+      min-height: 92px;
+      resize: vertical;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.86rem;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 13px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      background: var(--ink);
+      color: white;
+    }
+
+    button.secondary {
+      background: var(--accent-soft);
+      color: var(--ink);
+    }
+
+    .message {
+      color: var(--muted);
+      font-size: 0.88rem;
+      min-height: 1.2rem;
     }
 
     @media (max-width: 700px) {
@@ -244,9 +359,15 @@
           {{ end }}
           {{ else }}
           {{ range .Issues }}
-          <a class="card" href="{{ .URL }}">
+          <a class="card" href="{{ .URL }}" data-issue="{{ .Number }}" data-title="{{ .Title }}">
             <div class="issue-number">#{{ .Number }}</div>
             <p class="issue-title">{{ .Title }}</p>
+            {{ if .Agent }}
+            <div class="agent-status">
+              <span class="agent-dot {{ .Agent.Status }}">{{ if eq .Agent.Status "completed" }}○{{ else }}●{{ end }}</span>
+              <span>{{ .Agent.Runner }} · {{ .Agent.Mode }} · {{ .Agent.Status }}</span>
+            </div>
+            {{ end }}
             {{ if .Labels }}
             <div class="labels">
               {{ range .Labels }}
@@ -265,6 +386,154 @@
       {{ end }}
     </section>
   </main>
+  <div class="modal-backdrop" id="dispatchBackdrop">
+    <form class="modal" id="dispatchForm">
+      <h2 id="dispatchTitle">Dispatch</h2>
+      <div class="field">
+        <label for="runner">Runner</label>
+        <select id="runner" name="runner"></select>
+      </div>
+      <div class="field">
+        <label for="mode">Mode</label>
+        <select id="mode" name="mode"></select>
+      </div>
+      <div class="field">
+        <label for="repoKey">Repo key</label>
+        <input id="repoKey" name="repoKey" readonly>
+      </div>
+      <div class="field">
+        <label for="commandPreview">Command preview</label>
+        <textarea id="commandPreview" readonly></textarea>
+      </div>
+      <div class="message" id="dispatchMessage"></div>
+      <div class="modal-actions">
+        <button class="secondary" type="button" id="copyCommand">Copy</button>
+        <button class="secondary" type="button" id="cancelDispatch">Cancel</button>
+        <button type="submit" id="confirmDispatch">Dispatch</button>
+      </div>
+    </form>
+  </div>
+  <script>
+    const cards = Array.from(document.querySelectorAll(".card[data-issue]"));
+    const backdrop = document.getElementById("dispatchBackdrop");
+    const form = document.getElementById("dispatchForm");
+    const title = document.getElementById("dispatchTitle");
+    const runner = document.getElementById("runner");
+    const mode = document.getElementById("mode");
+    const repoKey = document.getElementById("repoKey");
+    const preview = document.getElementById("commandPreview");
+    const message = document.getElementById("dispatchMessage");
+    const confirmButton = document.getElementById("confirmDispatch");
+    let selected = cards[0] || null;
+    let confirmDuplicate = false;
+
+    function selectCard(card) {
+      if (!card) return;
+      if (selected) selected.classList.remove("selected");
+      selected = card;
+      selected.classList.add("selected");
+    }
+
+    function setOptions(select, values, current) {
+      select.textContent = "";
+      values.forEach((value) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        option.selected = value === current;
+        select.appendChild(option);
+      });
+    }
+
+    async function openDispatch() {
+      if (!selected) return;
+      confirmDuplicate = false;
+      message.textContent = "";
+      const issue = selected.dataset.issue;
+      title.textContent = `Dispatch #${issue}`;
+      const response = await fetch(`/api/dispatch/options?issue=${encodeURIComponent(issue)}`);
+      const options = await response.json();
+      setOptions(runner, options.runners, options.runner);
+      setOptions(mode, options.modes, options.mode);
+      repoKey.value = options.repo_key || options.repo;
+      preview.value = options.preview || "";
+      message.textContent = options.error || "";
+      confirmButton.textContent = runner.value === "manual" ? "Record manual" : "Dispatch";
+      backdrop.classList.add("open");
+    }
+
+    async function refreshPreview() {
+      if (!selected) return;
+      const issue = selected.dataset.issue;
+      const params = new URLSearchParams({ issue, runner: runner.value, mode: mode.value });
+      const response = await fetch(`/api/dispatch/options?${params}`);
+      const options = await response.json();
+      preview.value = options.preview || "";
+      message.textContent = options.error || "";
+    }
+
+    cards.forEach((card) => {
+      card.addEventListener("click", (event) => {
+        if (event.metaKey || event.ctrlKey) return;
+        event.preventDefault();
+        selectCard(card);
+      });
+    });
+    selectCard(selected);
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "d" && !backdrop.classList.contains("open")) {
+        event.preventDefault();
+        openDispatch();
+      }
+      if (event.key === "Escape") {
+        backdrop.classList.remove("open");
+      }
+    });
+
+    document.getElementById("cancelDispatch").addEventListener("click", () => {
+      backdrop.classList.remove("open");
+    });
+
+    document.getElementById("copyCommand").addEventListener("click", async () => {
+      await navigator.clipboard.writeText(preview.value);
+      message.textContent = "Command copied.";
+    });
+
+    runner.addEventListener("change", () => {
+      confirmButton.textContent = runner.value === "manual" ? "Record manual" : "Dispatch";
+      refreshPreview();
+    });
+    mode.addEventListener("change", refreshPreview);
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!selected) return;
+      const response = await fetch("/api/dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          issue: Number(selected.dataset.issue),
+          runner: runner.value,
+          mode: mode.value,
+          confirm_duplicate: confirmDuplicate
+        })
+      });
+      if (response.ok) {
+        const result = await response.json();
+        preview.value = result.command || preview.value;
+        if (result.duplicate) {
+          message.textContent = `Already dispatched to ${result.duplicate.runner}. Submit again to re-dispatch.`;
+          confirmDuplicate = true;
+          return;
+        }
+        message.textContent = result.manual ? "Manual command recorded. Copy and run it where needed." : "Dispatched.";
+        window.location.reload();
+        return;
+      }
+      message.textContent = (await response.text()).trim();
+    });
+  </script>
 </body>
 
 </html>

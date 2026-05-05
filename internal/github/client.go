@@ -20,6 +20,10 @@ type Label struct {
 	Description string `json:"description,omitempty"`
 }
 
+type Assignee struct {
+	Login string `json:"login"`
+}
+
 type Milestone struct {
 	Number       int    `json:"number"`
 	Title        string `json:"title"`
@@ -37,11 +41,13 @@ type MilestoneRef struct {
 type Issue struct {
 	Number    int           `json:"number"`
 	Title     string        `json:"title"`
+	Body      string        `json:"body,omitempty"`
 	URL       string        `json:"url"`
 	State     string        `json:"state,omitempty"`
 	ClosedAt  string        `json:"closedAt,omitempty"`
 	Labels    []Label       `json:"labels"`
 	Milestone *MilestoneRef `json:"milestone,omitempty"`
+	Assignees []Assignee    `json:"assignees,omitempty"`
 }
 
 type Section struct {
@@ -52,9 +58,10 @@ type Section struct {
 }
 
 type Board struct {
-	Repo      repo.Details `json:"repo"`
-	Sections  []Section    `json:"sections"`
-	UpdatedAt time.Time    `json:"updated_at"`
+	Repo         repo.Details `json:"repo"`
+	Sections     []Section    `json:"sections"`
+	ClosedIssues []Issue      `json:"closed_issues,omitempty"`
+	UpdatedAt    time.Time    `json:"updated_at"`
 }
 
 type Lane string
@@ -106,9 +113,10 @@ func (c *Client) LoadBoardWithOptions(ctx context.Context, details repo.Details,
 
 	sections := buildLaneSections(milestones, issues, options.GroupByMilestone)
 	return Board{
-		Repo:      details,
-		Sections:  sections,
-		UpdatedAt: time.Now().UTC(),
+		Repo:         details,
+		Sections:     sections,
+		ClosedIssues: closedIssues,
+		UpdatedAt:    time.Now().UTC(),
 	}, nil
 }
 
@@ -289,7 +297,7 @@ func (c *Client) listOpenIssues(ctx context.Context, slug string) ([]Issue, erro
 		"--repo", slug,
 		"--state", "open",
 		"--limit", "500",
-		"--json", "number,title,url,state,labels,milestone",
+		"--json", "number,title,body,url,state,labels,milestone,assignees",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load issues: %w", err)
@@ -310,7 +318,7 @@ func (c *Client) listDoneIssues(ctx context.Context, slug string, window time.Du
 		"--state", "closed",
 		"--search", search,
 		"--limit", "500",
-		"--json", "number,title,url,state,closedAt,labels,milestone",
+		"--json", "number,title,body,url,state,closedAt,labels,milestone,assignees",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load done issues: %w", err)

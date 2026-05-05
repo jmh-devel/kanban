@@ -1,12 +1,16 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jmh-devel/kanban/internal/agent"
 	"github.com/jmh-devel/kanban/internal/github"
 	"github.com/jmh-devel/kanban/internal/repo"
+	"github.com/jmh-devel/kanban/internal/state"
 )
 
 func TestBuildColumnsAlwaysReturnsFourLanes(t *testing.T) {
@@ -53,10 +57,10 @@ func TestViewRendersFourColumnBoardAtAcceptedWidths(t *testing.T) {
 		}}},
 	}
 	for _, width := range []int{80, 120, 200} {
-		model := newModel(board, nil, nil)
-		model.width = width
-		model.height = 32
-		out := model.View()
+		m := newModel(board, nil, nil)
+		m.width = width
+		m.height = 32
+		out := m.View()
 		for _, lane := range laneNames {
 			if !strings.Contains(out, lane) {
 				t.Fatalf("width %d missing lane %q in:\n%s", width, lane, out)
@@ -74,9 +78,9 @@ func TestNarrowViewFallsBackToTextBoard(t *testing.T) {
 		UpdatedAt: time.Date(2026, 5, 5, 7, 0, 0, 0, time.UTC),
 		Sections:  []github.Section{{Title: "Unscheduled", Issues: []github.Issue{{Number: 12, Title: "Build server"}}}},
 	}
-	model := newModel(board, nil, nil)
-	model.width = 79
-	out := model.View()
+	m := newModel(board, nil, nil)
+	m.width = 79
+	out := m.View()
 	if !strings.Contains(out, "Repo: jmh-devel/example") || strings.Contains(out, "In Progress") {
 		t.Fatalf("narrow view did not use print fallback:\n%s", out)
 	}
@@ -89,10 +93,10 @@ func TestNoColorUsesAccessibleASCII(t *testing.T) {
 		UpdatedAt: time.Now(),
 		Sections:  []github.Section{{Title: "Unscheduled", Issues: []github.Issue{{Number: 12, Title: "Build server"}}}},
 	}
-	model := newModel(board, nil, nil)
-	model.width = 120
-	model.height = 24
-	out := model.View()
+	m := newModel(board, nil, nil)
+	m.width = 120
+	m.height = 24
+	out := m.View()
 	if strings.ContainsAny(out, "┌┐└┘╭╮╰╯─│") {
 		t.Fatalf("NO_COLOR output contains box-drawing characters:\n%s", out)
 	}
@@ -118,10 +122,128 @@ func TestExpandContentIncludesFullBody(t *testing.T) {
 
 func TestBuildDispatchCommand(t *testing.T) {
 	board := github.Board{Repo: repo.Details{Slug: "jmh-devel/example", Name: "example"}}
-	got := buildDispatchCommand(board, 318, "codex", "implement")
-	want := "tsctl agent dispatch example --runner codex --issue 318 --mode implement"
+	config := state.DefaultConfig()
+	config.Repos = map[string]state.RepoConfig{"jmh-devel/example": {RepoKey: "example"}}
+	got, err := buildDispatchCommand(config, board, 318, "tsctl", "implement")
+	if err != nil {
+		t.Fatalf("buildDispatchCommand returned error: %v", err)
+	}
+	want := "tsctl agent dispatch example --runner tsctl --issue 318 --mode implement"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestDispatchEnterCallsBackend(t *testing.T) {
+	board := github.Board{
+		Repo:      repo.Details{Slug: "jmh-devel/example"},
+		UpdatedAt: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
+		Sections:  []github.Section{{Title: "Backlog", Issues: []github.Issue{{Number: 318, Title: "Build dispatch"}}}},
+	}
+	config := state.DefaultConfig()
+	config.Repos = map[string]state.RepoConfig{
+		"jmh-devel/example": {RepoKey: "example", PreferredRunner: "tsctl", PreferredMode: "implement"},
+	}
+	called := false
+	dispatcher := func(_ context.Context, _ state.Config, request agent.Request) (agent.Result, error) {
+		called = true
+		if request.Repo != "jmh-devel/example" || request.Issue != 318 || request.Runner != "tsctl" || request.Mode != "implement" || request.ConfirmDuplicate {
+			t.Fatalf("request = %#v", request)
+		}
+		return agent.Result{Dispatch: state.Dispatch{
+			Repo:         request.Repo,
+			Issue:        request.Issue,
+			Runner:       request.Runner,
+			Mode:         request.Mode,
+			DispatchedAt: time.Date(2026, 5, 5, 12, 1, 0, 0, time.UTC),
+			Status:       state.StatusDispatched,
+		}}, nil
+	}
+	m := newModelWithConfig(board, nil, nil, dispatcher, config)
+	m.mode = modeDispatch
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("dispatch enter returned nil command")
+	}
+	updated, _ = updated.Update(cmd())
+	got := updated.(model)
+	if !called {
+		t.Fatal("dispatcher was not called")
+	}
+	if got.mode != modeBoard {
+		t.Fatalf("mode = %v, want board", got.mode)
+	}
+	issue := got.columns[0].issues[0]
+	if issue.Agent == nil || issue.Agent.Runner != "tsctl" || issue.Agent.Mode != "implement" {
+		t.Fatalf("issue agent status not updated: %#v", issue.Agent)
+	}
+}
+
+func TestDispatchDuplicateRequiresSecondEnter(t *testing.T) {
+	board := github.Board{
+		Repo:      repo.Details{Slug: "jmh-devel/example"},
+		UpdatedAt: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
+		Sections:  []github.Section{{Title: "Backlog", Issues: []github.Issue{{Number: 318, Title: "Build dispatch"}}}},
+	}
+	config := state.DefaultConfig()
+	config.Repos = map[string]state.RepoConfig{
+		"jmh-devel/example": {RepoKey: "example", PreferredRunner: "tsctl", PreferredMode: "implement"},
+	}
+	calls := 0
+	dispatcher := func(_ context.Context, _ state.Config, request agent.Request) (agent.Result, error) {
+		calls++
+		if calls == 1 {
+			if request.ConfirmDuplicate {
+				t.Fatal("first dispatch unexpectedly confirmed duplicate")
+			}
+			return agent.Result{Duplicate: &agent.Duplicate{Runner: "tsctl", Mode: "implement", DispatchedAt: time.Date(2026, 5, 5, 11, 0, 0, 0, time.UTC)}}, nil
+		}
+		if !request.ConfirmDuplicate {
+			t.Fatal("second dispatch did not confirm duplicate")
+		}
+		return agent.Result{Dispatch: state.Dispatch{
+			Repo:         request.Repo,
+			Issue:        request.Issue,
+			Runner:       request.Runner,
+			Mode:         request.Mode,
+			DispatchedAt: time.Date(2026, 5, 5, 12, 1, 0, 0, time.UTC),
+			Status:       state.StatusDispatched,
+		}}, nil
+	}
+	m := newModelWithConfig(board, nil, nil, dispatcher, config)
+	m.mode = modeDispatch
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = updated.Update(cmd())
+	afterDuplicate := updated.(model)
+	if !afterDuplicate.dispatch.confirmDuplicate || afterDuplicate.mode != modeDispatch {
+		t.Fatalf("duplicate state not retained: %#v", afterDuplicate.dispatch)
+	}
+	if !strings.Contains(afterDuplicate.renderDispatch(), "Press Enter again") {
+		t.Fatalf("duplicate prompt missing:\n%s", afterDuplicate.renderDispatch())
+	}
+
+	updated, cmd = afterDuplicate.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = updated.Update(cmd())
+	afterConfirm := updated.(model)
+	if afterConfirm.mode != modeBoard || calls != 2 {
+		t.Fatalf("duplicate confirmation failed: mode=%v calls=%d", afterConfirm.mode, calls)
+	}
+}
+
+func TestNarrowEnterRendersIssueDetail(t *testing.T) {
+	board := github.Board{
+		Repo:      repo.Details{Slug: "jmh-devel/example"},
+		UpdatedAt: time.Date(2026, 5, 5, 7, 0, 0, 0, time.UTC),
+		Sections:  []github.Section{{Title: "Backlog", Issues: []github.Issue{{Number: 12, Title: "Build server", Body: "full body"}}}},
+	}
+	m := newModel(board, nil, nil)
+	m.width = 79
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	out := updated.(model).View()
+	if !strings.Contains(out, "full body") || !strings.Contains(out, "[Esc] back") {
+		t.Fatalf("narrow expand did not render detail view:\n%s", out)
 	}
 }
 

@@ -1,0 +1,10 @@
+# Default environment for kanban systemd service.
+# Path to the repository to serve.
+KANBAN_PATH=/srv/repos/current
+
+# Optional explicit GitHub slug (owner/repo).
+# If empty, kanban resolves from the repository origin remote.
+KANBAN_REPO=
+
+# HTTP bind address.
+KANBAN_ADDR=127.0.0.1:3584

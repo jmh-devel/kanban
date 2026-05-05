@@ -1,0 +1,10 @@
+Package: kanban
+Version: 0.1.0
+Architecture: amd64
+Maintainer: jmh-devel
+Depends: git, gh
+Description: Lightweight GitHub issue board CLI.
+ Detects the active git repo from the current working directory,
+ resolves the GitHub slug from the origin remote, fetches milestones
+ and open issues through the GitHub CLI, and renders a board in the
+ terminal or through a local web server.

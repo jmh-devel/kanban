@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>kanban · {{ .Repo.Slug }}</title>
+  <style>
+    :root {
+      --bg: #f4f1e8;
+      --panel: #fffdf8;
+      --ink: #182126;
+      --muted: #56626b;
+      --border: #d7c9b1;
+      --accent: #c45b2d;
+      --accent-soft: #f3d7bf;
+      --shadow: 0 14px 40px rgba(37, 29, 19, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at top right, rgba(196, 91, 45, 0.12), transparent 30%),
+        linear-gradient(180deg, #f8f4eb 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+
+    header {
+      padding: 24px 28px 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 2rem;
+      letter-spacing: -0.04em;
+    }
+
+    .meta {
+      color: var(--muted);
+      margin-top: 8px;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .actions {
+      margin-top: 16px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .button {
+      display: inline-block;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: white;
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .button.secondary {
+      background: var(--accent-soft);
+      color: var(--ink);
+    }
+
+    main {
+      padding: 16px 20px 28px;
+    }
+
+    .board {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .column {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .column-header {
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid rgba(215, 201, 177, 0.75);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(244, 241, 232, 0.65));
+    }
+
+    .column-title {
+      margin: 0;
+      font-size: 1.05rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .count {
+      min-width: 2rem;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      text-align: center;
+      font-size: 0.85rem;
+    }
+
+    .cards {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .card {
+      background: white;
+      border: 1px solid rgba(215, 201, 177, 0.9);
+      border-radius: 16px;
+      padding: 14px;
+      text-decoration: none;
+      color: inherit;
+      box-shadow: 0 6px 18px rgba(37, 29, 19, 0.06);
+    }
+
+    .card:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .issue-number {
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+    }
+
+    .issue-title {
+      margin: 0;
+      font-size: 0.98rem;
+      line-height: 1.35;
+    }
+
+    .labels {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .label {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #eff2f4;
+      color: #31414c;
+      font-size: 0.76rem;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-style: italic;
+      padding: 6px 2px;
+    }
+
+    @media (max-width: 700px) {
+      header {
+        padding: 20px 16px 8px;
+      }
+
+      main {
+        padding: 12px 12px 20px;
+      }
+
+      h1 {
+        font-size: 1.6rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>{{ .Repo.Slug }}</h1>
+    <div class="meta">
+      <span>Path: {{ .Repo.RootPath }}</span>
+      <span>Updated: {{ .UpdatedAt.Format "2006-01-02 15:04:05 UTC" }}</span>
+    </div>
+    <div class="actions">
+      <a class="button" href="/">Refresh</a>
+      <a class="button secondary" href="/api/board">JSON</a>
+      {{ if .Repo.WebURL }}<a class="button secondary" href="{{ .Repo.WebURL }}">Origin</a>{{ end }}
+    </div>
+  </header>
+  <main>
+    <section class="board">
+      {{ range .Sections }}
+      <article class="column">
+        <div class="column-header">
+          <h2 class="column-title">
+            <span>{{ .Title }}</span>
+            <span class="count">{{ len .Issues }}</span>
+          </h2>
+        </div>
+        <div class="cards">
+          {{ if .Issues }}
+          {{ range .Issues }}
+          <a class="card" href="{{ .URL }}">
+            <div class="issue-number">#{{ .Number }}</div>
+            <p class="issue-title">{{ .Title }}</p>
+            {{ if .Labels }}
+            <div class="labels">
+              {{ range .Labels }}
+              <span class="label">{{ .Name }}</span>
+              {{ end }}
+            </div>
+            {{ end }}
+          </a>
+          {{ end }}
+          {{ else }}
+          <div class="empty">No open issues.</div>
+          {{ end }}
+        </div>
+      </article>
+      {{ end }}
+    </section>
+  </main>
+</body>
+
+</html>

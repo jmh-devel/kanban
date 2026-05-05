@@ -1,0 +1,19 @@
+[Unit]
+Description=kanban local board server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/kanban
+WorkingDirectory=/
+ExecStart=/bin/sh -lc '/usr/bin/kanban serve --addr "${KANBAN_ADDR:-127.0.0.1:3584}" --path "${KANBAN_PATH:?KANBAN_PATH is required}" ${KANBAN_REPO:+--repo "${KANBAN_REPO}"}'
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

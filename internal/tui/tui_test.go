@@ -1,12 +1,16 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jmh-devel/kanban/internal/agent"
 	"github.com/jmh-devel/kanban/internal/github"
 	"github.com/jmh-devel/kanban/internal/repo"
+	"github.com/jmh-devel/kanban/internal/state"
 )
 
 func TestBuildColumnsAlwaysReturnsFourLanes(t *testing.T) {
@@ -82,6 +86,28 @@ func TestNarrowViewFallsBackToTextBoard(t *testing.T) {
 	}
 }
 
+func TestNarrowEnterRendersIssueDetails(t *testing.T) {
+	board := github.Board{
+		Repo:      repo.Details{Slug: "jmh-devel/example"},
+		UpdatedAt: time.Date(2026, 5, 5, 7, 0, 0, 0, time.UTC),
+		Sections: []github.Section{{Title: "Unscheduled", Issues: []github.Issue{{
+			Number: 12,
+			Title:  "Build server",
+			Body:   "narrow body",
+			URL:    "https://github.com/jmh-devel/example/issues/12",
+		}}}},
+	}
+	m := newModel(board, nil, nil)
+	m.width = 79
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(model)
+	out := got.View()
+	if got.mode != modeExpand || !strings.Contains(out, "narrow body") || !strings.Contains(out, "[Esc/q] back") {
+		t.Fatalf("narrow expand did not render details:\n%s", out)
+	}
+}
+
 func TestNoColorUsesAccessibleASCII(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	board := github.Board{
@@ -118,10 +144,150 @@ func TestExpandContentIncludesFullBody(t *testing.T) {
 
 func TestBuildDispatchCommand(t *testing.T) {
 	board := github.Board{Repo: repo.Details{Slug: "jmh-devel/example", Name: "example"}}
-	got := buildDispatchCommand(board, 318, "codex", "implement")
-	want := "tsctl agent dispatch example --runner codex --issue 318 --mode implement"
+	config := state.Config{
+		Repos: map[string]state.RepoConfig{"jmh-devel/example": {RepoKey: "example"}},
+		Runners: map[string]state.RunnerConfig{
+			"tsctl": {Kind: "tsctl_dispatch"},
+		},
+	}
+	got := buildDispatchCommand(config, board, 318, "tsctl", "implement")
+	want := "tsctl agent dispatch example --runner tsctl --issue 318 --mode implement"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestDispatchEnterExecutesDispatcherAndRefreshes(t *testing.T) {
+	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
+	if err := state.SaveConfig(dispatchTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	loaderCalls := 0
+	board := github.Board{
+		Repo: repo.Details{Slug: "jmh-devel/example"},
+		Sections: []github.Section{{Title: "Unscheduled", Issues: []github.Issue{{
+			Number: 12,
+			Title:  "Dispatch me",
+		}}}},
+		UpdatedAt: time.Date(2026, 5, 5, 7, 0, 0, 0, time.UTC),
+	}
+	m := newModel(board, func(context.Context) (github.Board, error) {
+		loaderCalls++
+		board.UpdatedAt = board.UpdatedAt.Add(time.Minute)
+		return board, nil
+	}, nil)
+	m.dispatcher = agent.Dispatcher{
+		ExecCommand: func(_ context.Context, command string) error {
+			want := "tsctl agent dispatch example --runner tsctl --issue 12 --mode implement"
+			if command != want {
+				t.Fatalf("command = %q, want %q", command, want)
+			}
+			return nil
+		},
+		MoveIssue: func(context.Context, string, int) error {
+			t.Fatal("auto move should be disabled in this test")
+			return nil
+		},
+		Now: func() time.Time {
+			return time.Date(2026, 5, 5, 8, 0, 0, 0, time.UTC)
+		},
+	}
+	m.prepareDispatch()
+	m.mode = modeDispatch
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected dispatch command")
+	}
+	msg := cmd()
+	updated, cmd = updated.(model).Update(msg)
+	if cmd == nil {
+		t.Fatal("expected refresh command after dispatch")
+	}
+	updated, _ = updated.(model).Update(cmd())
+	got := updated.(model)
+
+	if got.mode != modeBoard || loaderCalls != 1 {
+		t.Fatalf("mode=%v loaderCalls=%d", got.mode, loaderCalls)
+	}
+	dispatches, err := state.LoadDispatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatches) != 1 || dispatches[0].Runner != "tsctl" || dispatches[0].Issue != 12 {
+		t.Fatalf("dispatches = %+v", dispatches)
+	}
+}
+
+func TestDispatchEnterRequiresSecondEnterForDuplicate(t *testing.T) {
+	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
+	if err := state.SaveConfig(dispatchTestConfig()); err != nil {
+		t.Fatal(err)
+	}
+	existing := state.Dispatch{
+		Repo:         "jmh-devel/example",
+		Issue:        12,
+		Runner:       "tsctl",
+		Mode:         "implement",
+		DispatchedAt: time.Date(2026, 5, 5, 7, 0, 0, 0, time.UTC),
+		Command:      "tsctl agent dispatch example --runner tsctl --issue 12 --mode implement",
+		Status:       state.StatusDispatched,
+	}
+	if err := state.SaveDispatches([]state.Dispatch{existing}); err != nil {
+		t.Fatal(err)
+	}
+	board := github.Board{
+		Repo:      repo.Details{Slug: "jmh-devel/example"},
+		UpdatedAt: time.Date(2026, 5, 5, 7, 0, 0, 0, time.UTC),
+		Sections:  []github.Section{{Title: "Unscheduled", Issues: []github.Issue{{Number: 12, Title: "Dispatch me"}}}},
+	}
+	executed := 0
+	m := newModel(board, func(context.Context) (github.Board, error) { return board, nil }, nil)
+	m.dispatcher = agent.Dispatcher{
+		ExecCommand: func(context.Context, string) error {
+			executed++
+			return nil
+		},
+		Now: func() time.Time {
+			return time.Date(2026, 5, 5, 8, 0, 0, 0, time.UTC)
+		},
+	}
+	m.prepareDispatch()
+	m.mode = modeDispatch
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = updated.(model).Update(cmd())
+	got := updated.(model)
+	if executed != 0 || !got.dispatch.confirmDuplicate || got.dispatch.duplicate == nil || got.mode != modeDispatch {
+		t.Fatalf("executed=%d duplicate=%+v mode=%v", executed, got.dispatch.duplicate, got.mode)
+	}
+
+	updated, cmd = got.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd = updated.(model).Update(cmd())
+	if cmd == nil {
+		t.Fatal("expected refresh command after confirmed duplicate")
+	}
+	updated, _ = updated.(model).Update(cmd())
+	got = updated.(model)
+	if executed != 1 || got.mode != modeBoard {
+		t.Fatalf("executed=%d mode=%v", executed, got.mode)
+	}
+}
+
+func dispatchTestConfig() state.Config {
+	autoMove := false
+	return state.Config{
+		Repos: map[string]state.RepoConfig{
+			"jmh-devel/example": {
+				RepoKey:         "example",
+				PreferredRunner: "tsctl",
+				PreferredMode:   "implement",
+			},
+		},
+		Runners: map[string]state.RunnerConfig{
+			"tsctl": {Kind: "tsctl_dispatch"},
+		},
+		Agent: state.AgentConfig{AutoMoveOnDispatch: &autoMove},
 	}
 }
 

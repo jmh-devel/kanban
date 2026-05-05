@@ -37,6 +37,7 @@ The detailed comparison lives in [docs/specs/0001-mvp.md](docs/specs/0001-mvp.md
 - `git`
 - `gh`
 - authenticated GitHub CLI session for the target repository
+- `tsctl` when dispatching through a configured `tsctl_dispatch` runner
 
 ## Commands
 
@@ -76,6 +77,20 @@ kanban init --apply
 # - exits when browser window/tab closes
 kanban open
 ```
+
+## TUI
+
+`kanban tui` opens the interactive terminal board.
+
+- `j/k` or arrow keys navigate cards
+- `h/l`, arrows, or `Tab` switch columns
+- `Enter` expands the selected issue; narrow terminals show a plain detail view with an explicit `[Esc/q] back` hint
+- `d` opens the dispatch modal
+- `m` moves the selected issue to a lane
+- `o` opens the selected issue in the browser
+- `r` refreshes the board
+
+Dispatch uses the configured repo defaults from `kanban config show`: `repo_key`, `preferred_runner`, `preferred_mode`, and the configured runner catalog. Pressing `Enter` in the dispatch modal executes the same backend dispatch path as the web UI. `tsctl_dispatch` runners run `tsctl agent dispatch ...`; `manual` records the dispatch command without executing it. If an issue already has an active dispatch, the modal blocks the first attempt and requires pressing `Enter` again to re-dispatch.
 
 ## Local server
 

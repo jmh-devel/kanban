@@ -26,7 +26,7 @@ func TestRenderBoardText(t *testing.T) {
 	if !strings.Contains(out, "#12 Build server [backend]") {
 		t.Fatalf("missing issue line: %s", out)
 	}
-	if !strings.Contains(out, "(no open issues)") {
+	if !strings.Contains(out, "(no issues)") {
 		t.Fatalf("missing empty-section marker: %s", out)
 	}
 }

@@ -40,6 +40,8 @@ type Issue struct {
 	URL       string        `json:"url"`
 	Labels    []Label       `json:"labels"`
 	Milestone *MilestoneRef `json:"milestone,omitempty"`
+	State     string        `json:"state,omitempty"`
+	ClosedAt  string        `json:"closedAt,omitempty"`
 }
 
 type Section struct {
@@ -54,23 +56,46 @@ type Board struct {
 	UpdatedAt time.Time    `json:"updated_at"`
 }
 
-type Client struct{}
+type LoadOptions struct {
+	DoneWindowDays int
+	Now            time.Time
+}
+
+type Lane string
+
+const (
+	LaneBacklog    Lane = "Backlog"
+	LaneInProgress Lane = "In Progress"
+	LaneReview     Lane = "Review"
+	LaneDone       Lane = "Done"
+
+	LabelInProgress = "kanban:in-progress"
+	LabelReview     = "kanban:review"
+
+	DefaultDoneWindowDays = 14
+)
+
+type ghRunner func(ctx context.Context, args ...string) (string, error)
+
+type Client struct {
+	runner ghRunner
+}
 
 func NewClient() *Client {
-	return &Client{}
+	return &Client{runner: runGH}
 }
 
 func (c *Client) LoadBoard(ctx context.Context, details repo.Details) (Board, error) {
-	milestones, err := c.listMilestones(ctx, details.Slug)
-	if err != nil {
-		return Board{}, err
-	}
-	issues, err := c.listIssues(ctx, details.Slug)
+	return c.LoadBoardWithOptions(ctx, details, LoadOptions{})
+}
+
+func (c *Client) LoadBoardWithOptions(ctx context.Context, details repo.Details, options LoadOptions) (Board, error) {
+	issues, err := c.listBoardIssues(ctx, details.Slug, options)
 	if err != nil {
 		return Board{}, err
 	}
 
-	sections := buildSections(milestones, issues)
+	sections := buildLaneSections(issues)
 	return Board{
 		Repo:      details,
 		Sections:  sections,
@@ -78,74 +103,81 @@ func (c *Client) LoadBoard(ctx context.Context, details repo.Details) (Board, er
 	}, nil
 }
 
-func buildSections(milestones []Milestone, issues []Issue) []Section {
-	sections := make([]Section, 0, len(milestones)+1)
-	byMilestone := make(map[string][]Issue, len(milestones))
-	var unscheduled []Issue
+func buildLaneSections(issues []Issue) []Section {
+	sections := []Section{
+		{Title: string(LaneBacklog)},
+		{Title: string(LaneInProgress)},
+		{Title: string(LaneReview)},
+		{Title: string(LaneDone)},
+	}
+	byLane := map[Lane]*[]Issue{
+		LaneBacklog:    &sections[0].Issues,
+		LaneInProgress: &sections[1].Issues,
+		LaneReview:     &sections[2].Issues,
+		LaneDone:       &sections[3].Issues,
+	}
 
 	for _, issue := range issues {
-		if issue.Milestone == nil || strings.TrimSpace(issue.Milestone.Title) == "" {
-			unscheduled = append(unscheduled, issue)
-			continue
-		}
-		byMilestone[issue.Milestone.Title] = append(byMilestone[issue.Milestone.Title], issue)
+		lane := issueLane(issue)
+		*byLane[lane] = append(*byLane[lane], issue)
 	}
 
-	for _, milestone := range milestones {
-		milestoneCopy := milestone
-		issuesForMilestone := append([]Issue(nil), byMilestone[milestone.Title]...)
-		sort.Slice(issuesForMilestone, func(i, j int) bool {
-			return issuesForMilestone[i].Number < issuesForMilestone[j].Number
+	for i := range sections {
+		sort.Slice(sections[i].Issues, func(a, b int) bool {
+			return sections[i].Issues[a].Number > sections[i].Issues[b].Number
 		})
-		sections = append(sections, Section{
-			Milestone: &milestoneCopy,
-			Title:     milestone.Title,
-			Issues:    issuesForMilestone,
-		})
-		delete(byMilestone, milestone.Title)
 	}
-
-	leftoverTitles := make([]string, 0, len(byMilestone))
-	for title := range byMilestone {
-		leftoverTitles = append(leftoverTitles, title)
-	}
-	sort.Strings(leftoverTitles)
-	for _, title := range leftoverTitles {
-		issuesForMilestone := append([]Issue(nil), byMilestone[title]...)
-		sort.Slice(issuesForMilestone, func(i, j int) bool {
-			return issuesForMilestone[i].Number < issuesForMilestone[j].Number
-		})
-		sections = append(sections, Section{Title: title, Issues: issuesForMilestone})
-	}
-
-	sort.Slice(unscheduled, func(i, j int) bool {
-		return unscheduled[i].Number < unscheduled[j].Number
-	})
-	sections = append(sections, Section{Title: "Unscheduled", Issues: unscheduled})
 	return sections
 }
 
-func (c *Client) listMilestones(ctx context.Context, slug string) ([]Milestone, error) {
-	path := fmt.Sprintf("repos/%s/milestones?state=open&per_page=100", slug)
-	out, err := runGH(ctx, "api", path)
-	if err != nil {
-		return nil, fmt.Errorf("load milestones: %w", err)
+func issueLane(issue Issue) Lane {
+	if strings.EqualFold(issue.State, "closed") {
+		return LaneDone
 	}
-	var milestones []Milestone
-	if err := json.Unmarshal([]byte(out), &milestones); err != nil {
-		return nil, fmt.Errorf("decode milestones: %w", err)
+	for _, label := range issue.Labels {
+		switch label.Name {
+		case LabelInProgress:
+			return LaneInProgress
+		case LabelReview:
+			return LaneReview
+		}
 	}
-	return milestones, nil
+	return LaneBacklog
 }
 
-func (c *Client) listIssues(ctx context.Context, slug string) ([]Issue, error) {
-	out, err := runGH(ctx,
+func (c *Client) listBoardIssues(ctx context.Context, slug string, options LoadOptions) ([]Issue, error) {
+	openIssues, err := c.listIssues(ctx, slug, "open", "")
+	if err != nil {
+		return nil, err
+	}
+	doneWindowDays := options.DoneWindowDays
+	if doneWindowDays <= 0 {
+		doneWindowDays = DefaultDoneWindowDays
+	}
+	now := options.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	closedSince := now.UTC().AddDate(0, 0, -doneWindowDays).Format("2006-01-02")
+	closedIssues, err := c.listIssues(ctx, slug, "closed", "closed:>="+closedSince)
+	if err != nil {
+		return nil, err
+	}
+	return append(openIssues, closedIssues...), nil
+}
+
+func (c *Client) listIssues(ctx context.Context, slug string, state string, search string) ([]Issue, error) {
+	args := []string{
 		"issue", "list",
 		"--repo", slug,
-		"--state", "open",
+		"--state", state,
 		"--limit", "500",
-		"--json", "number,title,url,labels,milestone",
-	)
+		"--json", "number,title,url,labels,milestone,state,closedAt",
+	}
+	if search != "" {
+		args = append(args, "--search", search)
+	}
+	out, err := c.runner(ctx, args...)
 	if err != nil {
 		return nil, fmt.Errorf("load issues: %w", err)
 	}
@@ -154,6 +186,46 @@ func (c *Client) listIssues(ctx context.Context, slug string) ([]Issue, error) {
 		return nil, fmt.Errorf("decode issues: %w", err)
 	}
 	return issues, nil
+}
+
+func (c *Client) MoveIssue(ctx context.Context, slug string, number int, lane Lane) error {
+	switch lane {
+	case LaneBacklog:
+		return c.editIssueLabels(ctx, slug, number, nil, []string{LabelInProgress, LabelReview})
+	case LaneInProgress:
+		return c.editIssueLabels(ctx, slug, number, []string{LabelInProgress}, []string{LabelReview})
+	case LaneReview:
+		return c.editIssueLabels(ctx, slug, number, []string{LabelReview}, []string{LabelInProgress})
+	case LaneDone:
+		if err := c.editIssueLabels(ctx, slug, number, nil, []string{LabelInProgress, LabelReview}); err != nil {
+			return err
+		}
+		if _, err := c.runner(ctx, "issue", "close", fmt.Sprint(number), "--repo", slug); err != nil {
+			return fmt.Errorf("close issue #%d: %w", number, err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown lane %q", lane)
+	}
+}
+
+func (c *Client) editIssueLabels(ctx context.Context, slug string, number int, addLabels []string, removeLabels []string) error {
+	args := []string{"issue", "edit", fmt.Sprint(number), "--repo", slug}
+	for _, label := range removeLabels {
+		args = append(args, "--remove-label", label)
+	}
+	for _, label := range addLabels {
+		args = append(args, "--add-label", label)
+	}
+	if _, err := c.runner(ctx, args...); err != nil {
+		for _, label := range addLabels {
+			if strings.Contains(strings.ToLower(err.Error()), "not found") {
+				return fmt.Errorf("Label %q not found. Run: kanban init --setup-labels", label)
+			}
+		}
+		return fmt.Errorf("edit issue #%d labels: %w", number, err)
+	}
+	return nil
 }
 
 func runGH(ctx context.Context, args ...string) (string, error) {

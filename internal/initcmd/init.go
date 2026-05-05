@@ -3,6 +3,7 @@ package initcmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,13 +15,14 @@ import (
 )
 
 type Options struct {
-	Path       string
-	Owner      string
-	Name       string
-	Remote     string
-	Visibility string
-	Apply      bool
-	Stdout     io.Writer
+	Path        string
+	Owner       string
+	Name        string
+	Remote      string
+	Visibility  string
+	Apply       bool
+	SetupLabels bool
+	Stdout      io.Writer
 }
 
 type commandRunner func(ctx context.Context, name string, args ...string) (string, error)
@@ -81,6 +83,7 @@ func runWithRunner(ctx context.Context, options Options, runner commandRunner) e
 		return errors.New("owner is required (use --owner, or ensure git remote points to github.com)")
 	}
 
+	slug := owner + "/" + name
 	remotesOutput, err := runner(ctx, "git", "-C", root, "remote")
 	if err != nil {
 		// Not a git repo yet — skip remote check and fall through to publish.
@@ -94,13 +97,17 @@ func runWithRunner(ctx context.Context, options Options, runner commandRunner) e
 				}
 				_, _ = fmt.Fprintf(options.Stdout, "Remote %q already exists: %s\n", options.Remote, strings.TrimSpace(remoteURL))
 				_, _ = fmt.Fprintln(options.Stdout, "No publish action required.")
+				if options.SetupLabels {
+					if err := setupLaneLabels(ctx, runner, slug, options.Stdout); err != nil {
+						return err
+					}
+				}
 				return nil
 			}
 		}
 	}
 	_ = remotesOutput
 
-	slug := owner + "/" + name
 	args := []string{
 		"repo", "create", slug,
 		"--source", root,
@@ -114,6 +121,11 @@ func runWithRunner(ctx context.Context, options Options, runner commandRunner) e
 	_, _ = fmt.Fprintf(options.Stdout, "Publish command: gh %s\n", strings.Join(args, " "))
 	if !options.Apply {
 		_, _ = fmt.Fprintln(options.Stdout, "Dry-run only. Re-run with --apply to execute.")
+		if options.SetupLabels {
+			if err := setupLaneLabels(ctx, runner, slug, options.Stdout); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -122,6 +134,51 @@ func runWithRunner(ctx context.Context, options Options, runner commandRunner) e
 		return fmt.Errorf("publish repository: %w", err)
 	}
 	_, _ = fmt.Fprintln(options.Stdout, "Publish completed.")
+	if options.SetupLabels {
+		if err := setupLaneLabels(ctx, runner, slug, options.Stdout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type laneLabel struct {
+	Name        string
+	Color       string
+	Description string
+}
+
+var laneLabels = []laneLabel{
+	{Name: "kanban:in-progress", Color: "0075ca", Description: "Kanban lane: in progress"},
+	{Name: "kanban:review", Color: "e4e669", Description: "Kanban lane: review"},
+}
+
+func setupLaneLabels(ctx context.Context, runner commandRunner, slug string, stdout io.Writer) error {
+	out, err := runner(ctx, "gh", "label", "list", "--repo", slug, "--json", "name")
+	if err != nil {
+		return fmt.Errorf("list labels: %w", err)
+	}
+	var existing []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(out), &existing); err != nil {
+		return fmt.Errorf("decode labels: %w", err)
+	}
+	seen := make(map[string]bool, len(existing))
+	for _, label := range existing {
+		seen[label.Name] = true
+	}
+
+	for _, label := range laneLabels {
+		if seen[label.Name] {
+			_, _ = fmt.Fprintf(stdout, "Label %q already exists.\n", label.Name)
+			continue
+		}
+		if _, err := runner(ctx, "gh", "label", "create", label.Name, "--repo", slug, "--color", label.Color, "--description", label.Description); err != nil {
+			return fmt.Errorf("create label %q: %w", label.Name, err)
+		}
+		_, _ = fmt.Fprintf(stdout, "Created label %q.\n", label.Name)
+	}
 	return nil
 }
 

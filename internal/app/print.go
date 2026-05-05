@@ -18,7 +18,7 @@ func RenderBoardText(board github.Board) string {
 	for _, section := range board.Sections {
 		_, _ = fmt.Fprintf(&builder, "[%s] (%d)\n", section.Title, len(section.Issues))
 		if len(section.Issues) == 0 {
-			_, _ = fmt.Fprintln(&builder, "  (no open issues)")
+			_, _ = fmt.Fprintln(&builder, "  (no issues)")
 			_, _ = fmt.Fprintln(&builder)
 			continue
 		}

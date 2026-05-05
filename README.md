@@ -7,6 +7,7 @@ It is intentionally small:
 - detect the active git repo from `pwd`
 - resolve the GitHub slug from `origin`
 - fetch milestones and open issues through `gh`
+- derive Backlog/In Progress/Review/Done lanes from GitHub labels and closed issues
 - render a board in the terminal or through a local web server
 - stay generic enough to work in any repo that already uses GitHub Issues
 
@@ -41,7 +42,7 @@ The detailed comparison lives in [docs/specs/0001-mvp.md](docs/specs/0001-mvp.md
 ## Commands
 
 ```bash
-# Print a milestone-grouped board for the current repo
+# Print a lane-grouped board for the current repo
 kanban
 
 # Explicit commands
@@ -57,11 +58,17 @@ kanban serve --path /data/src/tacitsoft/core/solarops.us
 # Scaffold repo publish (dry-run by default)
 kanban init --owner your-org
 
+# Create lane labels in the target repo
+kanban init --setup-labels
+
 # Execute publish
 kanban init --owner your-org --apply
 
 # If origin already points at GitHub, owner can be auto-detected
 kanban init --apply
+
+# Show closed issues from the last 30 days in Done
+kanban print --done-window-days 30
 ```
 
 ## Local server

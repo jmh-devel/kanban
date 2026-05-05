@@ -82,12 +82,13 @@ func runServe(args []string) int {
 	repoSlug := fs.String("repo", "", "explicit GitHub repo slug (owner/repo)")
 	repoPath := fs.String("path", ".", "path inside the target git repository")
 	addr := fs.String("addr", "127.0.0.1:3584", "HTTP bind address")
+	doneWindowDays := fs.Int("done-window-days", ghclient.DefaultDoneWindowDays, "number of days of closed issues to show in Done")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	server, err := web.NewServer(func(ctx context.Context) (ghclient.Board, error) {
-		return loadBoard(ctx, *repoPath, *repoSlug)
+		return loadBoard(ctx, *repoPath, *repoSlug, *doneWindowDays)
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -109,18 +110,20 @@ func runInit(args []string) int {
 	remote := fs.String("remote", "origin", "git remote name to create")
 	visibility := fs.String("visibility", "public", "repository visibility: public|private")
 	apply := fs.Bool("apply", false, "execute publish command (default is dry-run)")
+	setupLabels := fs.Bool("setup-labels", false, "create required kanban lane labels in the GitHub repo")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	err := initcmd.Run(context.Background(), initcmd.Options{
-		Path:       *repoPath,
-		Owner:      *owner,
-		Name:       *name,
-		Remote:     *remote,
-		Visibility: *visibility,
-		Apply:      *apply,
-		Stdout:     os.Stdout,
+		Path:        *repoPath,
+		Owner:       *owner,
+		Name:        *name,
+		Remote:      *remote,
+		Visibility:  *visibility,
+		Apply:       *apply,
+		SetupLabels: *setupLabels,
+		Stdout:      os.Stdout,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -134,13 +137,14 @@ func loadBoardFromFlags(name string, args []string) (ghclient.Board, error) {
 	fs.SetOutput(os.Stderr)
 	repoSlug := fs.String("repo", "", "explicit GitHub repo slug (owner/repo)")
 	repoPath := fs.String("path", ".", "path inside the target git repository")
+	doneWindowDays := fs.Int("done-window-days", ghclient.DefaultDoneWindowDays, "number of days of closed issues to show in Done")
 	if err := fs.Parse(args); err != nil {
 		return ghclient.Board{}, err
 	}
-	return loadBoard(context.Background(), *repoPath, *repoSlug)
+	return loadBoard(context.Background(), *repoPath, *repoSlug, *doneWindowDays)
 }
 
-func loadBoard(ctx context.Context, startPath string, repoSlug string) (ghclient.Board, error) {
+func loadBoard(ctx context.Context, startPath string, repoSlug string, doneWindowDays int) (ghclient.Board, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -149,17 +153,17 @@ func loadBoard(ctx context.Context, startPath string, repoSlug string) (ghclient
 		return ghclient.Board{}, err
 	}
 	client := ghclient.NewClient()
-	return client.LoadBoard(ctx, details)
+	return client.LoadBoardWithOptions(ctx, details, ghclient.LoadOptions{DoneWindowDays: doneWindowDays})
 }
 
 func printUsage() {
 	fmt.Println(`kanban: lightweight GitHub board CLI
 
 Usage:
-	kanban init [--path DIR] [--owner ORG] [--name REPO] [--remote NAME] [--visibility public|private] [--apply]
-  kanban [print] [--path DIR] [--repo owner/repo]
-  kanban json [--path DIR] [--repo owner/repo]
-  kanban serve [--addr HOST:PORT] [--path DIR] [--repo owner/repo]
+	kanban init [--path DIR] [--owner ORG] [--name REPO] [--remote NAME] [--visibility public|private] [--apply] [--setup-labels]
+  kanban [print] [--path DIR] [--repo owner/repo] [--done-window-days N]
+  kanban json [--path DIR] [--repo owner/repo] [--done-window-days N]
+  kanban serve [--addr HOST:PORT] [--path DIR] [--repo owner/repo] [--done-window-days N]
   kanban version
 
 Behavior:

@@ -120,6 +120,19 @@
       gap: 12px;
     }
 
+    .subsection {
+      display: grid;
+      gap: 10px;
+    }
+
+    .subsection-title {
+      margin: 4px 2px 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
     .card {
       background: white;
       border: 1px solid rgba(215, 201, 177, 0.9);
@@ -210,6 +223,26 @@
         </div>
         <div class="cards">
           {{ if .Issues }}
+          {{ if .Sections }}
+          {{ range .Sections }}
+          <div class="subsection">
+            <h3 class="subsection-title">{{ .Title }}</h3>
+            {{ range .Issues }}
+            <a class="card" href="{{ .URL }}">
+              <div class="issue-number">#{{ .Number }}</div>
+              <p class="issue-title">{{ .Title }}</p>
+              {{ if .Labels }}
+              <div class="labels">
+                {{ range .Labels }}
+                <span class="label">{{ .Name }}</span>
+                {{ end }}
+              </div>
+              {{ end }}
+            </a>
+            {{ end }}
+          </div>
+          {{ end }}
+          {{ else }}
           {{ range .Issues }}
           <a class="card" href="{{ .URL }}">
             <div class="issue-number">#{{ .Number }}</div>
@@ -222,6 +255,7 @@
             </div>
             {{ end }}
           </a>
+          {{ end }}
           {{ end }}
           {{ else }}
           <div class="empty">No open issues.</div>

@@ -109,3 +109,64 @@ func TestRunWithRunnerApply(t *testing.T) {
 		t.Fatalf("missing completion output: %q", output.String())
 	}
 }
+
+func TestRunWithRunnerSetupLabels(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]fakeResult{
+		"git -C . rev-parse --show-toplevel":       {output: "/tmp/kanban\n"},
+		"git -C /tmp/kanban remote":                {output: "origin\n"},
+		"git -C /tmp/kanban remote get-url origin": {output: "git@github.com:jmh-devel/kanban.git\n"},
+		"gh label list --repo jmh-devel/kanban --limit 1000 --json name": {output: `[{"name":"kanban:review"}]`},
+		"gh label create kanban:in-progress --repo jmh-devel/kanban --color 0075ca --description Kanban lane: In Progress": {output: ""},
+	}}
+
+	var output bytes.Buffer
+	err := runWithRunner(context.Background(), Options{
+		Path:        ".",
+		Owner:       "jmh-devel",
+		Remote:      "origin",
+		Visibility:  "public",
+		SetupLabels: true,
+		Stdout:      &output,
+	}, runner.run)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	got := output.String()
+	if !strings.Contains(got, "Created label \"kanban:in-progress\"") {
+		t.Fatalf("missing created-label output: %q", got)
+	}
+	if !strings.Contains(got, "Label \"kanban:review\" already exists") {
+		t.Fatalf("missing existing-label output: %q", got)
+	}
+}
+
+func TestRunWithRunnerSetupLabelsCreatesBothWhenMissing(t *testing.T) {
+	runner := &fakeRunner{responses: map[string]fakeResult{
+		"git -C . rev-parse --show-toplevel": {output: "/tmp/kanban\n"},
+		"git -C /tmp/kanban remote":          {output: "\n"},
+		"gh label list --repo jmh-devel/kanban --limit 1000 --json name": {output: `[]`},
+		"gh label create kanban:in-progress --repo jmh-devel/kanban --color 0075ca --description Kanban lane: In Progress": {output: ""},
+		"gh label create kanban:review --repo jmh-devel/kanban --color e4e669 --description Kanban lane: Review":            {output: ""},
+	}}
+
+	var output bytes.Buffer
+	err := runWithRunner(context.Background(), Options{
+		Path:        ".",
+		Owner:       "jmh-devel",
+		Remote:      "origin",
+		Visibility:  "public",
+		SetupLabels: true,
+		Stdout:      &output,
+	}, runner.run)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+
+	got := output.String()
+	for _, label := range []string{"kanban:in-progress", "kanban:review"} {
+		if !strings.Contains(got, "Created label \""+label+"\"") {
+			t.Fatalf("missing created-label output for %s: %q", label, got)
+		}
+	}
+}

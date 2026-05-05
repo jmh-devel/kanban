@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,8 @@ func run(args []string) int {
 		return runJSON(args)
 	case "serve":
 		return runServe(args)
+	case "move":
+		return runMove(args)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 		return 0
@@ -82,12 +85,17 @@ func runServe(args []string) int {
 	repoSlug := fs.String("repo", "", "explicit GitHub repo slug (owner/repo)")
 	repoPath := fs.String("path", ".", "path inside the target git repository")
 	addr := fs.String("addr", "127.0.0.1:3584", "HTTP bind address")
+	doneWindowDays := fs.Int("done-window-days", ghclient.DefaultDoneDays, "days of closed issues to show in Done")
+	groupByMilestone := fs.Bool("group-by-milestone", false, "preserve milestone grouping metadata within lanes")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	server, err := web.NewServer(func(ctx context.Context) (ghclient.Board, error) {
-		return loadBoard(ctx, *repoPath, *repoSlug)
+		return loadBoard(ctx, *repoPath, *repoSlug, ghclient.BoardOptions{
+			DoneWindowDays:   *doneWindowDays,
+			GroupByMilestone: *groupByMilestone,
+		})
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -109,18 +117,20 @@ func runInit(args []string) int {
 	remote := fs.String("remote", "origin", "git remote name to create")
 	visibility := fs.String("visibility", "public", "repository visibility: public|private")
 	apply := fs.Bool("apply", false, "execute publish command (default is dry-run)")
+	setupLabels := fs.Bool("setup-labels", false, "create kanban lane labels in the target repository")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	err := initcmd.Run(context.Background(), initcmd.Options{
-		Path:       *repoPath,
-		Owner:      *owner,
-		Name:       *name,
-		Remote:     *remote,
-		Visibility: *visibility,
-		Apply:      *apply,
-		Stdout:     os.Stdout,
+		Path:        *repoPath,
+		Owner:       *owner,
+		Name:        *name,
+		Remote:      *remote,
+		Visibility:  *visibility,
+		Apply:       *apply,
+		SetupLabels: *setupLabels,
+		Stdout:      os.Stdout,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -129,18 +139,95 @@ func runInit(args []string) int {
 	return 0
 }
 
+func runMove(args []string) int {
+	fs := flag.NewFlagSet("move", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repoSlug := fs.String("repo", "", "explicit GitHub repo slug (owner/repo)")
+	repoPath := fs.String("path", ".", "path inside the target git repository")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "usage: kanban move [--path DIR] [--repo owner/repo] ISSUE LANE")
+		return 2
+	}
+	number, err := strconv.Atoi(fs.Arg(0))
+	if err != nil || number <= 0 {
+		fmt.Fprintf(os.Stderr, "invalid issue number %q\n", fs.Arg(0))
+		return 2
+	}
+	lane, err := parseLane(fs.Arg(1))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	details, err := repo.Detect(ctx, *repoPath, *repoSlug)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	client := ghclient.NewClient()
+	if err := client.MoveIssue(ctx, details.Slug, number, lane); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("Moved #%d to %s.\n", number, laneTitle(lane))
+	return 0
+}
+
+func parseLane(input string) (ghclient.Lane, error) {
+	lane := strings.ToLower(strings.TrimSpace(input))
+	lane = strings.ReplaceAll(lane, "_", "-")
+	lane = strings.ReplaceAll(lane, " ", "-")
+	switch lane {
+	case "backlog":
+		return ghclient.LaneBacklog, nil
+	case "in-progress", "progress", "inprogress":
+		return ghclient.LaneInProgress, nil
+	case "review":
+		return ghclient.LaneReview, nil
+	case "done":
+		return ghclient.LaneDone, nil
+	default:
+		return "", fmt.Errorf("unknown lane %q, expected backlog, in-progress, review, or done", input)
+	}
+}
+
+func laneTitle(lane ghclient.Lane) string {
+	switch lane {
+	case ghclient.LaneBacklog:
+		return "Backlog"
+	case ghclient.LaneInProgress:
+		return "In Progress"
+	case ghclient.LaneReview:
+		return "Review"
+	case ghclient.LaneDone:
+		return "Done"
+	default:
+		return string(lane)
+	}
+}
+
 func loadBoardFromFlags(name string, args []string) (ghclient.Board, error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	repoSlug := fs.String("repo", "", "explicit GitHub repo slug (owner/repo)")
 	repoPath := fs.String("path", ".", "path inside the target git repository")
+	doneWindowDays := fs.Int("done-window-days", ghclient.DefaultDoneDays, "days of closed issues to show in Done")
+	groupByMilestone := fs.Bool("group-by-milestone", false, "preserve milestone grouping metadata within lanes")
 	if err := fs.Parse(args); err != nil {
 		return ghclient.Board{}, err
 	}
-	return loadBoard(context.Background(), *repoPath, *repoSlug)
+	return loadBoard(context.Background(), *repoPath, *repoSlug, ghclient.BoardOptions{
+		DoneWindowDays:   *doneWindowDays,
+		GroupByMilestone: *groupByMilestone,
+	})
 }
 
-func loadBoard(ctx context.Context, startPath string, repoSlug string) (ghclient.Board, error) {
+func loadBoard(ctx context.Context, startPath string, repoSlug string, options ghclient.BoardOptions) (ghclient.Board, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -149,23 +236,25 @@ func loadBoard(ctx context.Context, startPath string, repoSlug string) (ghclient
 		return ghclient.Board{}, err
 	}
 	client := ghclient.NewClient()
-	return client.LoadBoard(ctx, details)
+	return client.LoadBoardWithOptions(ctx, details, options)
 }
 
 func printUsage() {
 	fmt.Println(`kanban: lightweight GitHub board CLI
 
 Usage:
-	kanban init [--path DIR] [--owner ORG] [--name REPO] [--remote NAME] [--visibility public|private] [--apply]
-  kanban [print] [--path DIR] [--repo owner/repo]
-  kanban json [--path DIR] [--repo owner/repo]
-  kanban serve [--addr HOST:PORT] [--path DIR] [--repo owner/repo]
+	kanban init [--path DIR] [--owner ORG] [--name REPO] [--remote NAME] [--visibility public|private] [--apply] [--setup-labels]
+  kanban [print] [--path DIR] [--repo owner/repo] [--done-window-days N]
+  kanban json [--path DIR] [--repo owner/repo] [--done-window-days N]
+  kanban serve [--addr HOST:PORT] [--path DIR] [--repo owner/repo] [--done-window-days N]
+  kanban move [--path DIR] [--repo owner/repo] ISSUE backlog|in-progress|review|done
   kanban version
 
 Behavior:
 	- init is dry-run by default and prints the gh publish command it would run
+	- init --setup-labels creates kanban:in-progress and kanban:review when missing
 	- init derives --owner from the existing git remote when available
   - defaults to the git repository under the current working directory
   - resolves the GitHub slug from remote.origin.url unless --repo is provided
-  - uses the GitHub CLI for milestone and issue data`)
+  - uses GitHub labels as the source of truth for board lanes`)
 }

@@ -25,8 +25,11 @@ var templateFS embed.FS
 
 type Loader func(context.Context) (github.Board, error)
 
+type Mover func(context.Context, string, int, github.Lane) error
+
 type Server struct {
 	loader     Loader
+	mover      Mover
 	tmpl       *template.Template
 	standalone *standaloneTracker
 }
@@ -85,7 +88,12 @@ func NewServer(loader Loader) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse template: %w", err)
 	}
-	return &Server{loader: loader, tmpl: tmpl}, nil
+	client := github.NewClient()
+	return &Server{
+		loader: loader,
+		mover:  client.MoveIssue,
+		tmpl:   tmpl,
+	}, nil
 }
 
 func (s *Server) Serve(addr string) error {
@@ -145,6 +153,7 @@ func (s *Server) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /api/board", s.handleBoard)
+	mux.HandleFunc("POST /api/issues/move", s.handleMoveIssue)
 	mux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
 	mux.HandleFunc("POST /api/dispatch", s.handleDispatch)
 	mux.HandleFunc("POST /api/standalone/heartbeat", s.handleStandaloneHeartbeat)
@@ -233,6 +242,45 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, result)
+}
+
+func (s *Server) handleMoveIssue(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Issue int    `json:"issue"`
+		Lane  string `json:"lane"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if request.Issue <= 0 {
+		http.Error(w, "issue number must be positive", http.StatusBadRequest)
+		return
+	}
+	lane, err := parseLane(request.Lane)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if s.mover == nil {
+		http.Error(w, "issue mover is not configured", http.StatusInternalServerError)
+		return
+	}
+	board, err := s.loader(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := s.mover(ctx, board.Repo.Slug, request.Issue, lane); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"issue": request.Issue,
+		"lane":  lane,
+	})
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -355,6 +403,24 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+func parseLane(input string) (github.Lane, error) {
+	lane := strings.ToLower(strings.TrimSpace(input))
+	lane = strings.ReplaceAll(lane, "_", "-")
+	lane = strings.ReplaceAll(lane, " ", "-")
+	switch lane {
+	case "backlog":
+		return github.LaneBacklog, nil
+	case "in-progress", "progress", "inprogress":
+		return github.LaneInProgress, nil
+	case "review":
+		return github.LaneReview, nil
+	case "done":
+		return github.LaneDone, nil
+	default:
+		return "", fmt.Errorf("unknown lane %q, expected backlog, in-progress, review, or done", input)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, value any) {

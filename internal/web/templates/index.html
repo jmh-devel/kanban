@@ -14,6 +14,7 @@
       --border: #d7c9b1;
       --accent: #c45b2d;
       --accent-soft: #f3d7bf;
+      --danger: #b42318;
       --shadow: 0 14px 40px rgba(37, 29, 19, 0.12);
     }
 
@@ -70,8 +71,53 @@
       color: var(--ink);
     }
 
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(420px, calc(100vw - 36px));
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      color: var(--ink);
+      display: none;
+      z-index: 5;
+    }
+
+    .toast.open {
+      display: block;
+    }
+
+    .toast.error {
+      border-color: rgba(180, 35, 24, 0.45);
+      color: var(--danger);
+    }
+
     main {
       padding: 16px 20px 28px;
+    }
+
+    .board-shell {
+      position: relative;
+    }
+
+    .flow-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+      z-index: 3;
+    }
+
+    .flow-layer path {
+      fill: none;
+      stroke: rgba(24, 33, 38, 0.42);
+      stroke-width: 2;
+      stroke-linecap: round;
     }
 
     .board {
@@ -79,14 +125,21 @@
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
       gap: 18px;
       align-items: start;
+      position: relative;
+      z-index: 2;
     }
 
     .column {
       background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 20px;
+      border-radius: 8px;
       box-shadow: var(--shadow);
       overflow: hidden;
+    }
+
+    .column.drag-over {
+      outline: 3px solid rgba(196, 91, 45, 0.22);
+      border-color: var(--accent);
     }
 
     .column-header {
@@ -118,6 +171,7 @@
       padding: 14px;
       display: grid;
       gap: 12px;
+      min-height: 88px;
     }
 
     .subsection {
@@ -136,11 +190,13 @@
     .card {
       background: white;
       border: 1px solid rgba(215, 201, 177, 0.9);
-      border-radius: 16px;
+      border-radius: 8px;
       padding: 14px;
       text-decoration: none;
       color: inherit;
       box-shadow: 0 6px 18px rgba(37, 29, 19, 0.06);
+      cursor: grab;
+      position: relative;
     }
 
     .card:hover {
@@ -148,9 +204,18 @@
       transform: translateY(-1px);
     }
 
+    .card:focus-visible {
+      outline: 3px solid rgba(196, 91, 45, 0.34);
+      outline-offset: 2px;
+    }
+
     .card.selected {
       outline: 3px solid rgba(196, 91, 45, 0.25);
       border-color: var(--accent);
+    }
+
+    .card.dragging {
+      opacity: 0.5;
     }
 
     .issue-number {
@@ -217,6 +282,7 @@
       align-items: center;
       justify-content: center;
       padding: 18px;
+      z-index: 10;
     }
 
     .modal-backdrop.open {
@@ -273,6 +339,7 @@
       justify-content: flex-end;
       gap: 10px;
       margin-top: 14px;
+      flex-wrap: wrap;
     }
 
     button {
@@ -297,6 +364,123 @@
       min-height: 1.2rem;
     }
 
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      background: rgba(24, 33, 38, 0.22);
+      z-index: 9;
+    }
+
+    .drawer-backdrop.open {
+      display: block;
+    }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      height: 100vh;
+      width: min(560px, 100vw);
+      background: var(--panel);
+      border-left: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      transform: translateX(100%);
+      transition: transform 140ms ease;
+      z-index: 11;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    .drawer.open {
+      transform: translateX(0);
+    }
+
+    .drawer-header {
+      padding: 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .drawer-title {
+      margin: 0;
+      font-size: 1.25rem;
+      line-height: 1.25;
+    }
+
+    .icon-button {
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .drawer-body {
+      padding: 18px;
+      overflow: auto;
+      display: grid;
+      align-content: start;
+      gap: 16px;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .detail-item {
+      display: grid;
+      gap: 4px;
+      border: 1px solid rgba(215, 201, 177, 0.75);
+      border-radius: 8px;
+      padding: 10px;
+      background: white;
+      min-width: 0;
+    }
+
+    .detail-label {
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 0.76rem;
+      text-transform: uppercase;
+    }
+
+    .detail-value {
+      overflow-wrap: anywhere;
+    }
+
+    .issue-body {
+      white-space: pre-wrap;
+      line-height: 1.45;
+      background: white;
+      border: 1px solid rgba(215, 201, 177, 0.75);
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 42vh;
+      overflow: auto;
+    }
+
+    .drawer-footer {
+      padding: 14px 18px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .drawer-footer select {
+      width: auto;
+      min-width: 150px;
+    }
+
     @media (max-width: 700px) {
       header {
         padding: 20px 16px 8px;
@@ -308,6 +492,17 @@
 
       h1 {
         font-size: 1.6rem;
+      }
+
+      .detail-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .drawer-footer select,
+      .drawer-footer button,
+      .drawer-footer .button {
+        width: 100%;
+        text-align: center;
       }
     }
   </style>
@@ -327,25 +522,56 @@
     </div>
   </header>
   <main>
-    <section class="board">
-      {{ range .Sections }}
-      <article class="column">
-        <div class="column-header">
-          <h2 class="column-title">
-            <span>{{ .Title }}</span>
-            <span class="count">{{ len .Issues }}</span>
-          </h2>
-        </div>
-        <div class="cards">
-          {{ if .Issues }}
-          {{ if .Sections }}
-          {{ range .Sections }}
-          <div class="subsection">
-            <h3 class="subsection-title">{{ .Title }}</h3>
+    <div class="board-shell" id="boardShell">
+      <svg class="flow-layer" id="flowLayer" aria-hidden="true"></svg>
+      <section class="board" id="board">
+        {{ range .Sections }}
+        {{ $lane := .Title }}
+        <article class="column" data-lane="{{ $lane }}">
+          <div class="column-header">
+            <h2 class="column-title">
+              <span>{{ .Title }}</span>
+              <span class="count">{{ len .Issues }}</span>
+            </h2>
+          </div>
+          <div class="cards">
+            {{ if .Issues }}
+            {{ if .Sections }}
+            {{ range .Sections }}
+            <div class="subsection">
+              <h3 class="subsection-title">{{ .Title }}</h3>
+              {{ range .Issues }}
+              <a class="card" href="{{ .URL }}" draggable="true" data-issue="{{ .Number }}" data-title="{{ .Title }}" data-lane="{{ $lane }}">
+                <div class="issue-number">#{{ .Number }}</div>
+                <p class="issue-title">{{ .Title }}</p>
+                {{ if .Agent }}
+                <div class="agent-status">
+                  <span class="agent-dot {{ .Agent.Status }}">{{ if eq .Agent.Status "completed" }}○{{ else }}●{{ end }}</span>
+                  <span>{{ .Agent.Runner }} · {{ .Agent.Mode }} · {{ .Agent.Status }}</span>
+                </div>
+                {{ end }}
+                {{ if .Labels }}
+                <div class="labels">
+                  {{ range .Labels }}
+                  <span class="label">{{ .Name }}</span>
+                  {{ end }}
+                </div>
+                {{ end }}
+              </a>
+              {{ end }}
+            </div>
+            {{ end }}
+            {{ else }}
             {{ range .Issues }}
-            <a class="card" href="{{ .URL }}">
+            <a class="card" href="{{ .URL }}" draggable="true" data-issue="{{ .Number }}" data-title="{{ .Title }}" data-lane="{{ $lane }}">
               <div class="issue-number">#{{ .Number }}</div>
               <p class="issue-title">{{ .Title }}</p>
+              {{ if .Agent }}
+              <div class="agent-status">
+                <span class="agent-dot {{ .Agent.Status }}">{{ if eq .Agent.Status "completed" }}○{{ else }}●{{ end }}</span>
+                <span>{{ .Agent.Runner }} · {{ .Agent.Mode }} · {{ .Agent.Status }}</span>
+              </div>
+              {{ end }}
               {{ if .Labels }}
               <div class="labels">
                 {{ range .Labels }}
@@ -355,37 +581,62 @@
               {{ end }}
             </a>
             {{ end }}
+            {{ end }}
+            {{ else }}
+            <div class="empty">No open issues.</div>
+            {{ end }}
           </div>
-          {{ end }}
-          {{ else }}
-          {{ range .Issues }}
-          <a class="card" href="{{ .URL }}" data-issue="{{ .Number }}" data-title="{{ .Title }}">
-            <div class="issue-number">#{{ .Number }}</div>
-            <p class="issue-title">{{ .Title }}</p>
-            {{ if .Agent }}
-            <div class="agent-status">
-              <span class="agent-dot {{ .Agent.Status }}">{{ if eq .Agent.Status "completed" }}○{{ else }}●{{ end }}</span>
-              <span>{{ .Agent.Runner }} · {{ .Agent.Mode }} · {{ .Agent.Status }}</span>
-            </div>
-            {{ end }}
-            {{ if .Labels }}
-            <div class="labels">
-              {{ range .Labels }}
-              <span class="label">{{ .Name }}</span>
-              {{ end }}
-            </div>
-            {{ end }}
-          </a>
-          {{ end }}
-          {{ end }}
-          {{ else }}
-          <div class="empty">No open issues.</div>
-          {{ end }}
-        </div>
-      </article>
-      {{ end }}
-    </section>
+        </article>
+        {{ end }}
+      </section>
+    </div>
   </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="drawer-backdrop" id="detailBackdrop"></div>
+  <aside class="drawer" id="detailDrawer" aria-modal="true" aria-labelledby="detailTitle" role="dialog">
+    <div class="drawer-header">
+      <div>
+        <div class="issue-number" id="detailNumber"></div>
+        <h2 class="drawer-title" id="detailTitle"></h2>
+      </div>
+      <button class="icon-button secondary" type="button" id="closeDetail" title="Close detail" aria-label="Close detail">×</button>
+    </div>
+    <div class="drawer-body">
+      <div class="detail-grid">
+        <div class="detail-item">
+          <span class="detail-label">Labels</span>
+          <span class="detail-value" id="detailLabels"></span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Assignees</span>
+          <span class="detail-value" id="detailAssignees"></span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Milestone</span>
+          <span class="detail-value" id="detailMilestone"></span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Dispatch</span>
+          <span class="detail-value" id="detailDispatch"></span>
+        </div>
+      </div>
+      <div>
+        <div class="detail-label">Body</div>
+        <div class="issue-body" id="detailBody"></div>
+      </div>
+    </div>
+    <div class="drawer-footer">
+      <select id="detailLane" aria-label="Move issue to lane">
+        <option value="backlog">Backlog</option>
+        <option value="in-progress">In Progress</option>
+        <option value="review">Review</option>
+        <option value="done">Done</option>
+      </select>
+      <button type="button" id="moveFromDetail">Move</button>
+      <a class="button secondary" id="detailGithub" href="#">GitHub</a>
+      <button class="secondary" type="button" id="dispatchFromDetail">Dispatch</button>
+    </div>
+  </aside>
   <div class="modal-backdrop" id="dispatchBackdrop">
     <form class="modal" id="dispatchForm">
       <h2 id="dispatchTitle">Dispatch</h2>
@@ -414,7 +665,11 @@
     </form>
   </div>
   <script>
-    const cards = Array.from(document.querySelectorAll(".card[data-issue]"));
+    let cards = Array.from(document.querySelectorAll(".card[data-issue]"));
+    const columns = Array.from(document.querySelectorAll(".column[data-lane]"));
+    const boardShell = document.getElementById("boardShell");
+    const flowLayer = document.getElementById("flowLayer");
+    const toast = document.getElementById("toast");
     const standaloneSession = "{{ .StandaloneSession }}";
     const backdrop = document.getElementById("dispatchBackdrop");
     const form = document.getElementById("dispatchForm");
@@ -425,8 +680,58 @@
     const preview = document.getElementById("commandPreview");
     const message = document.getElementById("dispatchMessage");
     const confirmButton = document.getElementById("confirmDispatch");
+    const detailBackdrop = document.getElementById("detailBackdrop");
+    const detailDrawer = document.getElementById("detailDrawer");
+    const detailNumber = document.getElementById("detailNumber");
+    const detailTitle = document.getElementById("detailTitle");
+    const detailLabels = document.getElementById("detailLabels");
+    const detailAssignees = document.getElementById("detailAssignees");
+    const detailMilestone = document.getElementById("detailMilestone");
+    const detailDispatch = document.getElementById("detailDispatch");
+    const detailBody = document.getElementById("detailBody");
+    const detailLane = document.getElementById("detailLane");
+    const detailGithub = document.getElementById("detailGithub");
     let selected = cards[0] || null;
     let confirmDuplicate = false;
+    let boardData = null;
+    let draggedCard = null;
+    let toastTimer = null;
+
+    const laneValues = {
+      "Backlog": "backlog",
+      "In Progress": "in-progress",
+      "Review": "review",
+      "Done": "done"
+    };
+
+    function normalizeLane(lane) {
+      return laneValues[lane] || String(lane || "").toLowerCase().replaceAll(" ", "-");
+    }
+
+    function allIssues(board) {
+      const issues = [];
+      (board.sections || []).forEach((section) => {
+        (section.issues || []).forEach((issue) => issues.push(issue));
+        (section.sections || []).forEach((subsection) => {
+          (subsection.issues || []).forEach((issue) => issues.push(issue));
+        });
+      });
+      return issues;
+    }
+
+    function issueByNumber(number) {
+      if (!boardData) return null;
+      return allIssues(boardData).find((issue) => Number(issue.number) === Number(number)) || null;
+    }
+
+    function showToast(text, kind = "") {
+      clearTimeout(toastTimer);
+      toast.textContent = text;
+      toast.className = `toast open ${kind}`.trim();
+      toastTimer = setTimeout(() => {
+        toast.className = "toast";
+      }, 4200);
+    }
 
     function startStandaloneSessionHeartbeat() {
       if (!standaloneSession) return;
@@ -462,6 +767,92 @@
       if (selected) selected.classList.remove("selected");
       selected = card;
       selected.classList.add("selected");
+    }
+
+    function selectedIssue() {
+      if (!selected) return null;
+      return issueByNumber(selected.dataset.issue);
+    }
+
+    function openDetail(card) {
+      selectCard(card);
+      const issue = selectedIssue();
+      if (!issue) {
+        showToast("Issue details are still loading.", "error");
+        return;
+      }
+      detailNumber.textContent = `#${issue.number}`;
+      detailTitle.textContent = issue.title || "";
+      detailLabels.textContent = (issue.labels || []).map((label) => label.name).join(", ") || "None";
+      detailAssignees.textContent = (issue.assignees || []).map((assignee) => assignee.login).join(", ") || "None";
+      detailMilestone.textContent = issue.milestone ? issue.milestone.title : "None";
+      detailDispatch.textContent = issue.agent ? `${issue.agent.runner} · ${issue.agent.mode} · ${issue.agent.status}` : "None";
+      detailBody.textContent = String(issue.body || "").trim() || "(no body)";
+      detailGithub.href = issue.url || "#";
+      detailLane.value = normalizeLane(selected.dataset.lane);
+      detailBackdrop.classList.add("open");
+      detailDrawer.classList.add("open");
+    }
+
+    function closeDetail() {
+      detailBackdrop.classList.remove("open");
+      detailDrawer.classList.remove("open");
+    }
+
+    function laneColumn(lane) {
+      const normalized = normalizeLane(lane);
+      return columns.find((column) => normalizeLane(column.dataset.lane) === normalized) || null;
+    }
+
+    function placeCardInLane(card, lane) {
+      const column = laneColumn(lane);
+      if (!column) return;
+      const list = column.querySelector(".cards");
+      const empty = list.querySelector(".empty");
+      if (empty) empty.remove();
+      list.appendChild(card);
+      card.dataset.lane = column.dataset.lane;
+      updateCounts();
+      scheduleFlowRender();
+    }
+
+    function updateCounts() {
+      columns.forEach((column) => {
+        const count = column.querySelectorAll(".card[data-issue]").length;
+        const badge = column.querySelector(".count");
+        if (badge) badge.textContent = count;
+      });
+    }
+
+    async function moveIssue(card, lane) {
+      if (!card) return;
+      const previousLane = card.dataset.lane;
+      const previousParent = card.parentElement;
+      const previousNext = card.nextElementSibling;
+      const targetLane = normalizeLane(lane);
+      placeCardInLane(card, targetLane);
+      showToast(`Moving #${card.dataset.issue} to ${laneColumn(targetLane)?.dataset.lane || targetLane}...`);
+
+      const response = await fetch("/api/issues/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issue: Number(card.dataset.issue), lane: targetLane })
+      });
+      if (!response.ok) {
+        if (previousNext && previousNext.parentElement === previousParent) {
+          previousParent.insertBefore(card, previousNext);
+        } else {
+          previousParent.appendChild(card);
+        }
+        card.dataset.lane = previousLane;
+        updateCounts();
+        scheduleFlowRender();
+        showToast((await response.text()).trim() || "Move failed.", "error");
+        return;
+      }
+      showToast(`Moved #${card.dataset.issue}.`);
+      await loadBoardData();
+      if (detailDrawer.classList.contains("open")) openDetail(card);
     }
 
     function setOptions(select, values, current) {
@@ -502,13 +893,52 @@
       message.textContent = options.error || "";
     }
 
-    cards.forEach((card) => {
-      card.addEventListener("click", (event) => {
-        if (event.metaKey || event.ctrlKey) return;
+    function bindCards() {
+      cards = Array.from(document.querySelectorAll(".card[data-issue]"));
+      cards.forEach((card) => {
+        card.tabIndex = 0;
+        card.addEventListener("click", (event) => {
+          if (event.metaKey || event.ctrlKey) return;
+          event.preventDefault();
+          openDetail(card);
+        });
+        card.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openDetail(card);
+          }
+        });
+        card.addEventListener("dragstart", (event) => {
+          draggedCard = card;
+          card.classList.add("dragging");
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", card.dataset.issue);
+        });
+        card.addEventListener("dragend", () => {
+          card.classList.remove("dragging");
+          draggedCard = null;
+          columns.forEach((column) => column.classList.remove("drag-over"));
+          scheduleFlowRender();
+        });
+      });
+    }
+
+    columns.forEach((column) => {
+      column.addEventListener("dragover", (event) => {
+        if (!draggedCard) return;
         event.preventDefault();
-        selectCard(card);
+        event.dataTransfer.dropEffect = "move";
+        column.classList.add("drag-over");
+      });
+      column.addEventListener("dragleave", () => column.classList.remove("drag-over"));
+      column.addEventListener("drop", (event) => {
+        event.preventDefault();
+        column.classList.remove("drag-over");
+        if (!draggedCard) return;
+        moveIssue(draggedCard, normalizeLane(column.dataset.lane));
       });
     });
+
     selectCard(selected);
     startStandaloneSessionHeartbeat();
 
@@ -519,8 +949,17 @@
       }
       if (event.key === "Escape") {
         backdrop.classList.remove("open");
+        closeDetail();
       }
     });
+
+    document.getElementById("closeDetail").addEventListener("click", closeDetail);
+    detailBackdrop.addEventListener("click", closeDetail);
+    document.getElementById("moveFromDetail").addEventListener("click", () => {
+      if (!selected) return;
+      moveIssue(selected, detailLane.value);
+    });
+    document.getElementById("dispatchFromDetail").addEventListener("click", openDispatch);
 
     document.getElementById("cancelDispatch").addEventListener("click", () => {
       backdrop.classList.remove("open");
@@ -564,6 +1003,84 @@
       }
       message.textContent = (await response.text()).trim();
     });
+
+    async function loadBoardData() {
+      const response = await fetch("/api/board");
+      if (!response.ok) return;
+      boardData = await response.json();
+      renderFlowLines();
+    }
+
+    function relationshipLinks() {
+      if (!boardData) return [];
+      const known = new Set(allIssues(boardData).map((issue) => Number(issue.number)));
+      const links = [];
+      const pattern = /\b(blocks|blocked by|depends on|depends-on|relates to|linked to)\s+#(\d+)\b/gi;
+      allIssues(boardData).forEach((issue) => {
+        const body = issue.body || "";
+        let match;
+        while ((match = pattern.exec(body)) !== null) {
+          const target = Number(match[2]);
+          if (known.has(target)) {
+            links.push({ from: Number(issue.number), to: target, kind: match[1].toLowerCase() });
+          }
+        }
+      });
+      return links;
+    }
+
+    function renderFlowLines() {
+      if (!flowLayer || !boardShell) return;
+      const shellBox = boardShell.getBoundingClientRect();
+      flowLayer.setAttribute("viewBox", `0 0 ${shellBox.width} ${shellBox.height}`);
+      flowLayer.setAttribute("width", shellBox.width);
+      flowLayer.setAttribute("height", shellBox.height);
+      flowLayer.textContent = "";
+
+      const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+      const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+      marker.setAttribute("id", "flowArrow");
+      marker.setAttribute("viewBox", "0 0 10 10");
+      marker.setAttribute("refX", "9");
+      marker.setAttribute("refY", "5");
+      marker.setAttribute("markerWidth", "7");
+      marker.setAttribute("markerHeight", "7");
+      marker.setAttribute("orient", "auto-start-reverse");
+      const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+      arrow.setAttribute("fill", "rgba(24, 33, 38, 0.42)");
+      marker.appendChild(arrow);
+      defs.appendChild(marker);
+      flowLayer.appendChild(defs);
+
+      relationshipLinks().forEach((link) => {
+        const from = document.querySelector(`.card[data-issue="${link.from}"]`);
+        const to = document.querySelector(`.card[data-issue="${link.to}"]`);
+        if (!from || !to || from === to) return;
+        const a = from.getBoundingClientRect();
+        const b = to.getBoundingClientRect();
+        const x1 = a.left + a.width / 2 - shellBox.left;
+        const y1 = a.top + a.height / 2 - shellBox.top;
+        const x2 = b.left + b.width / 2 - shellBox.left;
+        const y2 = b.top + b.height / 2 - shellBox.top;
+        const bend = Math.max(44, Math.abs(x2 - x1) / 2);
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`);
+        path.setAttribute("marker-end", "url(#flowArrow)");
+        flowLayer.appendChild(path);
+      });
+    }
+
+    let flowFrame = null;
+    function scheduleFlowRender() {
+      cancelAnimationFrame(flowFrame);
+      flowFrame = requestAnimationFrame(renderFlowLines);
+    }
+
+    bindCards();
+    loadBoardData();
+    window.addEventListener("resize", scheduleFlowRender);
+    window.addEventListener("scroll", scheduleFlowRender, true);
   </script>
 </body>
 

@@ -13,6 +13,7 @@ import (
 	ghclient "github.com/jmh-devel/kanban/internal/github"
 	"github.com/jmh-devel/kanban/internal/initcmd"
 	"github.com/jmh-devel/kanban/internal/repo"
+	"github.com/jmh-devel/kanban/internal/tui"
 	"github.com/jmh-devel/kanban/internal/web"
 )
 
@@ -27,6 +28,8 @@ func run(args []string) int {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command = args[0]
 		args = args[1:]
+	} else if len(args) == 0 && isTerminal(os.Stdout) {
+		command = "tui"
 	}
 
 	switch command {
@@ -36,6 +39,8 @@ func run(args []string) int {
 		return runPrint(args)
 	case "json":
 		return runJSON(args)
+	case "tui":
+		return runTUI(args)
 	case "serve":
 		return runServe(args)
 	case "version", "--version", "-v":
@@ -49,6 +54,49 @@ func run(args []string) int {
 		printUsage()
 		return 2
 	}
+}
+
+func runTUI(args []string) int {
+	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repoSlug := fs.String("repo", "", "explicit GitHub repo slug (owner/repo)")
+	repoPath := fs.String("path", ".", "path inside the target git repository")
+	addr := fs.String("addr", "", "reserved for compatibility with serve")
+	_ = addr
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	var details ghclient.Board
+	loader := func(ctx context.Context) (ghclient.Board, error) {
+		board, err := loadBoard(ctx, *repoPath, *repoSlug)
+		if err == nil {
+			details = board
+		}
+		return board, err
+	}
+	client := ghclient.NewClient()
+	err := tui.Run(context.Background(), tui.Options{
+		Loader: loader,
+		Mover: func(ctx context.Context, issue ghclient.Issue, lane string) error {
+			slug := details.Repo.Slug
+			if slug == "" {
+				board, err := loadBoard(ctx, *repoPath, *repoSlug)
+				if err != nil {
+					return err
+				}
+				slug = board.Repo.Slug
+			}
+			return client.MoveIssue(ctx, slug, issue, lane)
+		},
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
 }
 
 func runPrint(args []string) int {
@@ -157,6 +205,7 @@ func printUsage() {
 
 Usage:
 	kanban init [--path DIR] [--owner ORG] [--name REPO] [--remote NAME] [--visibility public|private] [--apply]
+  kanban tui [--path DIR] [--repo owner/repo] [--addr HOST:PORT]
   kanban [print] [--path DIR] [--repo owner/repo]
   kanban json [--path DIR] [--repo owner/repo]
   kanban serve [--addr HOST:PORT] [--path DIR] [--repo owner/repo]
@@ -168,4 +217,12 @@ Behavior:
   - defaults to the git repository under the current working directory
   - resolves the GitHub slug from remote.origin.url unless --repo is provided
   - uses the GitHub CLI for milestone and issue data`)
+}
+
+func isTerminal(file *os.File) bool {
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }

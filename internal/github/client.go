@@ -20,6 +20,10 @@ type Label struct {
 	Description string `json:"description,omitempty"`
 }
 
+type Assignee struct {
+	Login string `json:"login"`
+}
+
 type Milestone struct {
 	Number       int    `json:"number"`
 	Title        string `json:"title"`
@@ -37,9 +41,13 @@ type MilestoneRef struct {
 type Issue struct {
 	Number    int           `json:"number"`
 	Title     string        `json:"title"`
+	Body      string        `json:"body,omitempty"`
 	URL       string        `json:"url"`
+	State     string        `json:"state,omitempty"`
+	ClosedAt  string        `json:"closedAt,omitempty"`
 	Labels    []Label       `json:"labels"`
 	Milestone *MilestoneRef `json:"milestone,omitempty"`
+	Assignees []Assignee    `json:"assignees,omitempty"`
 }
 
 type Section struct {
@@ -49,9 +57,10 @@ type Section struct {
 }
 
 type Board struct {
-	Repo      repo.Details `json:"repo"`
-	Sections  []Section    `json:"sections"`
-	UpdatedAt time.Time    `json:"updated_at"`
+	Repo         repo.Details `json:"repo"`
+	Sections     []Section    `json:"sections"`
+	ClosedIssues []Issue      `json:"closed_issues,omitempty"`
+	UpdatedAt    time.Time    `json:"updated_at"`
 }
 
 type Client struct{}
@@ -69,12 +78,17 @@ func (c *Client) LoadBoard(ctx context.Context, details repo.Details) (Board, er
 	if err != nil {
 		return Board{}, err
 	}
+	closedIssues, err := c.listRecentlyClosedIssues(ctx, details.Slug, 14)
+	if err != nil {
+		return Board{}, err
+	}
 
 	sections := buildSections(milestones, issues)
 	return Board{
-		Repo:      details,
-		Sections:  sections,
-		UpdatedAt: time.Now().UTC(),
+		Repo:         details,
+		Sections:     sections,
+		ClosedIssues: closedIssues,
+		UpdatedAt:    time.Now().UTC(),
 	}, nil
 }
 
@@ -144,7 +158,7 @@ func (c *Client) listIssues(ctx context.Context, slug string) ([]Issue, error) {
 		"--repo", slug,
 		"--state", "open",
 		"--limit", "500",
-		"--json", "number,title,url,labels,milestone",
+		"--json", "number,title,body,url,state,labels,milestone,assignees",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load issues: %w", err)
@@ -154,6 +168,78 @@ func (c *Client) listIssues(ctx context.Context, slug string) ([]Issue, error) {
 		return nil, fmt.Errorf("decode issues: %w", err)
 	}
 	return issues, nil
+}
+
+func (c *Client) listRecentlyClosedIssues(ctx context.Context, slug string, days int) ([]Issue, error) {
+	out, err := runGH(ctx,
+		"issue", "list",
+		"--repo", slug,
+		"--state", "closed",
+		"--limit", "500",
+		"--json", "number,title,body,url,state,closedAt,labels,milestone,assignees",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load closed issues: %w", err)
+	}
+	var issues []Issue
+	if err := json.Unmarshal([]byte(out), &issues); err != nil {
+		return nil, fmt.Errorf("decode closed issues: %w", err)
+	}
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+	recent := make([]Issue, 0, len(issues))
+	for _, issue := range issues {
+		closedAt, err := time.Parse(time.RFC3339, issue.ClosedAt)
+		if err != nil || closedAt.Before(cutoff) {
+			continue
+		}
+		recent = append(recent, issue)
+	}
+	sort.Slice(recent, func(i, j int) bool {
+		return recent[i].Number > recent[j].Number
+	})
+	return recent, nil
+}
+
+func (c *Client) MoveIssue(ctx context.Context, slug string, issue Issue, lane string) error {
+	currentLabels := make(map[string]bool, len(issue.Labels))
+	for _, label := range issue.Labels {
+		currentLabels[label.Name] = true
+	}
+
+	if strings.EqualFold(issue.State, "closed") && lane != "Done" {
+		if _, err := runGH(ctx, "issue", "reopen", fmt.Sprint(issue.Number), "--repo", slug); err != nil {
+			return fmt.Errorf("reopen issue: %w", err)
+		}
+	}
+
+	for _, label := range []string{"kanban:in-progress", "kanban:review"} {
+		if currentLabels[label] {
+			if _, err := runGH(ctx, "issue", "edit", fmt.Sprint(issue.Number), "--repo", slug, "--remove-label", label); err != nil {
+				return fmt.Errorf("remove label %q: %w", label, err)
+			}
+		}
+	}
+
+	switch lane {
+	case "Backlog":
+		return nil
+	case "In Progress":
+		if _, err := runGH(ctx, "issue", "edit", fmt.Sprint(issue.Number), "--repo", slug, "--add-label", "kanban:in-progress"); err != nil {
+			return fmt.Errorf("add label 'kanban:in-progress' (run: kanban init --setup-labels): %w", err)
+		}
+	case "Review":
+		if _, err := runGH(ctx, "issue", "edit", fmt.Sprint(issue.Number), "--repo", slug, "--add-label", "kanban:review"); err != nil {
+			return fmt.Errorf("add label 'kanban:review' (run: kanban init --setup-labels): %w", err)
+		}
+	case "Done":
+		if _, err := runGH(ctx, "issue", "close", fmt.Sprint(issue.Number), "--repo", slug); err != nil {
+			return fmt.Errorf("close issue: %w", err)
+		}
+	default:
+		return fmt.Errorf("unknown lane %q", lane)
+	}
+	return nil
 }
 
 func runGH(ctx context.Context, args ...string) (string, error) {

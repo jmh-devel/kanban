@@ -29,7 +29,7 @@ func TestHandleIssueMoveCallsMover(t *testing.T) {
 		return nil
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/api/issues/move", strings.NewReader(`{"issue":42,"lane":"in-progress"}`))
+	request := httptest.NewRequest(http.MethodPost, "http://example.com/api/issues/move", strings.NewReader(`{"issue":42,"lane":"in-progress"}`))
 	recorder := httptest.NewRecorder()
 	server.newMux().ServeHTTP(recorder, request)
 
@@ -54,7 +54,7 @@ func TestHandleIssueMoveRejectsUnknownLane(t *testing.T) {
 		return nil
 	}
 
-	request := httptest.NewRequest(http.MethodPost, "/api/issues/move", strings.NewReader(`{"issue":42,"lane":"blocked"}`))
+	request := httptest.NewRequest(http.MethodPost, "http://example.com/api/issues/move", strings.NewReader(`{"issue":42,"lane":"blocked"}`))
 	recorder := httptest.NewRecorder()
 	server.newMux().ServeHTTP(recorder, request)
 
@@ -86,7 +86,7 @@ func TestIndexRendersIssueDataForDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
 	recorder := httptest.NewRecorder()
 	server.newMux().ServeHTTP(recorder, request)
 

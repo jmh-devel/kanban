@@ -152,18 +152,22 @@ func (s *Server) ServeStandalone(addr string, session string, idleTimeout time.D
 
 func (s *Server) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", s.handleIndex)
-	mux.HandleFunc("GET /api/board", s.handleBoard)
-	mux.HandleFunc("POST /api/issues/move", s.handleIssueMove)
-	mux.HandleFunc("GET /api/dispatch/options", s.handleDispatchOptions)
-	mux.HandleFunc("POST /api/dispatch", s.handleDispatch)
-	mux.HandleFunc("POST /api/standalone/heartbeat", s.handleStandaloneHeartbeat)
-	mux.HandleFunc("POST /api/standalone/close", s.handleStandaloneClose)
-	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/api/board", s.handleBoard)
+	mux.HandleFunc("/api/issues/move", s.handleIssueMove)
+	mux.HandleFunc("/api/dispatch/options", s.handleDispatchOptions)
+	mux.HandleFunc("/api/dispatch", s.handleDispatch)
+	mux.HandleFunc("/api/standalone/heartbeat", s.handleStandaloneHeartbeat)
+	mux.HandleFunc("/api/standalone/close", s.handleStandaloneClose)
+	mux.HandleFunc("/healthz", s.handleHealth)
 	return mux
 }
 
 func (s *Server) handleIssueMove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var request struct {
 		Issue int    `json:"issue"`
 		Lane  string `json:"lane"`
@@ -204,6 +208,10 @@ func (s *Server) handleIssueMove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	board, err := s.loader(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -248,6 +256,10 @@ func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var request struct {
 		Issue            int    `json:"issue"`
 		Runner           string `json:"runner"`
@@ -286,6 +298,10 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	board, err := s.loader(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -307,6 +323,10 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStandaloneHeartbeat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.standalone == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -320,6 +340,10 @@ func (s *Server) handleStandaloneHeartbeat(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleStandaloneClose(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if s.standalone == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -391,6 +415,10 @@ func (m mapValues) Get(key string) string {
 }
 
 func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	board, err := s.loader(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -402,7 +430,11 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 	_ = encoder.Encode(board)
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok\n"))
 }

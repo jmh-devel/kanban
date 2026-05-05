@@ -518,8 +518,14 @@ func buildColumns(board github.Board) []column {
 		{title: laneDone, issues: append([]github.Issue(nil), board.ClosedIssues...)},
 	}
 	for _, section := range board.Sections {
+		if index, ok := laneIndexForSection(section.Title); ok {
+			columns[index].issues = append(columns[index].issues, section.Issues...)
+			continue
+		}
 		for _, issue := range section.Issues {
 			switch {
+			case strings.EqualFold(issue.State, "closed") || strings.TrimSpace(issue.ClosedAt) != "":
+				columns[3].issues = append(columns[3].issues, issue)
 			case hasLabel(issue, "kanban:in-progress"):
 				columns[1].issues = append(columns[1].issues, issue)
 			case hasLabel(issue, "kanban:review"):
@@ -529,7 +535,38 @@ func buildColumns(board github.Board) []column {
 			}
 		}
 	}
+	for i := range columns {
+		columns[i].issues = dedupeIssues(columns[i].issues)
+	}
 	return columns
+}
+
+func laneIndexForSection(title string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(title)) {
+	case "backlog":
+		return 0, true
+	case "in progress", "in-progress":
+		return 1, true
+	case "review":
+		return 2, true
+	case "done":
+		return 3, true
+	default:
+		return 0, false
+	}
+}
+
+func dedupeIssues(issues []github.Issue) []github.Issue {
+	seen := make(map[int]struct{}, len(issues))
+	deduped := make([]github.Issue, 0, len(issues))
+	for _, issue := range issues {
+		if _, exists := seen[issue.Number]; exists {
+			continue
+		}
+		seen[issue.Number] = struct{}{}
+		deduped = append(deduped, issue)
+	}
+	return deduped
 }
 
 func moveIssueLocal(board github.Board, issue github.Issue, lane string) github.Board {

@@ -142,3 +142,23 @@ func TestMoveIssueLocalAppliesLaneLabel(t *testing.T) {
 		t.Fatalf("conflicting review label remained: %#v", columns[1].issues[0].Labels)
 	}
 }
+
+func TestBuildColumnsDoneSectionDoesNotLeakIntoBacklog(t *testing.T) {
+	board := github.Board{
+		Sections: []github.Section{
+			{Title: "Backlog", Issues: nil},
+			{Title: "In Progress", Issues: nil},
+			{Title: "Review", Issues: nil},
+			{Title: "Done", Issues: []github.Issue{{Number: 3, Title: "Closed", State: "CLOSED"}}},
+		},
+		ClosedIssues: []github.Issue{{Number: 3, Title: "Closed", State: "CLOSED"}},
+	}
+
+	columns := buildColumns(board)
+	if len(columns[0].issues) != 0 {
+		t.Fatalf("backlog should be empty, got %d issues", len(columns[0].issues))
+	}
+	if len(columns[3].issues) != 1 || columns[3].issues[0].Number != 3 {
+		t.Fatalf("done should contain only issue #3, got %#v", columns[3].issues)
+	}
+}

@@ -201,10 +201,27 @@ func (s *Server) handleIssueMove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if status, ok := dispatchStatusForLane(lane); ok {
+		if _, err := state.MarkActiveDispatches(board.Repo.Slug, request.Issue, status); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	writeJSON(w, map[string]any{
 		"issue": request.Issue,
 		"lane":  lane,
 	})
+}
+
+func dispatchStatusForLane(lane github.Lane) (string, bool) {
+	switch lane {
+	case github.LaneBacklog:
+		return state.StatusCancelled, true
+	case github.LaneReview, github.LaneDone:
+		return state.StatusCompleted, true
+	default:
+		return "", false
+	}
 }
 
 func (s *Server) handleDispatchOptions(w http.ResponseWriter, r *http.Request) {

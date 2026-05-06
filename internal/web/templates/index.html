@@ -230,7 +230,96 @@
       color: #cf222e;
     }
 
-    .agent-dot.completed {
+    .agent-dot.completed,
+    .agent-dot.passed {
+      color: var(--muted);
+    }
+
+    .agent-dot.pending,
+    .agent-dot.running {
+      color: #1f883d;
+    }
+
+    .jobs-panel {
+      display: none;
+      margin-top: 18px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .jobs-panel.open {
+      display: block;
+    }
+
+    .jobs-header {
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid rgba(215, 201, 177, 0.75);
+      flex-wrap: wrap;
+    }
+
+    .jobs-title {
+      margin: 0;
+      font-size: 0.98rem;
+    }
+
+    .jobs-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 0.84rem;
+      user-select: none;
+    }
+
+    .jobs-table-wrap {
+      overflow-x: auto;
+    }
+
+    .jobs-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+      min-width: 760px;
+    }
+
+    .jobs-table th,
+    .jobs-table td {
+      padding: 10px 12px;
+      text-align: left;
+      border-bottom: 1px solid rgba(215, 201, 177, 0.55);
+      white-space: nowrap;
+    }
+
+    .jobs-table th {
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      background: rgba(244, 241, 232, 0.58);
+    }
+
+    .jobs-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .job-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .job-status.failed {
+      color: #cf222e;
+    }
+
+    .job-status.passed {
       color: var(--muted);
     }
 
@@ -473,7 +562,7 @@
               {{ if .Agent }}
               <div class="agent-status">
                 <span class="agent-dot {{ .Agent.Status }}">{{ if eq .Agent.Status "completed" }}○{{ else }}●{{ end }}</span>
-                <span>{{ .Agent.Runner }} · {{ .Agent.Mode }} · {{ .Agent.Status }}</span>
+                <span>{{ .Agent.Runner }} / {{ .Agent.Mode }} / {{ .Agent.Status }}</span>
               </div>
               {{ end }}
               {{ if .Labels }}
@@ -499,7 +588,7 @@
             {{ if .Agent }}
             <div class="agent-status">
               <span class="agent-dot {{ .Agent.Status }}">{{ if eq .Agent.Status "completed" }}○{{ else }}●{{ end }}</span>
-              <span>{{ .Agent.Runner }} · {{ .Agent.Mode }} · {{ .Agent.Status }}</span>
+              <span>{{ .Agent.Runner }} / {{ .Agent.Mode }} / {{ .Agent.Status }}</span>
             </div>
             {{ end }}
             {{ if .Labels }}
@@ -524,6 +613,31 @@
       {{ end }}
       </section>
     </div>
+    <section class="jobs-panel" id="jobsPanel" aria-live="polite">
+      <div class="jobs-header">
+        <h2 class="jobs-title">Agent Jobs</h2>
+        <label class="jobs-toggle">
+          <input type="checkbox" id="jobsAllRepos">
+          <span>All repos</span>
+        </label>
+      </div>
+      <div class="jobs-table-wrap">
+        <table class="jobs-table">
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>Runner</th>
+              <th>Repo</th>
+              <th>Status</th>
+              <th>Started</th>
+              <th>Ended</th>
+              <th>Elapsed</th>
+            </tr>
+          </thead>
+          <tbody id="jobsBody"></tbody>
+        </table>
+      </div>
+    </section>
   </main>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="modal-backdrop" id="detailBackdrop">
@@ -607,11 +721,16 @@
     const detailBody = document.getElementById("detailBody");
     const detailGitHub = document.getElementById("detailGitHub");
     const detailMessage = document.getElementById("detailMessage");
+    const jobsPanel = document.getElementById("jobsPanel");
+    const jobsBody = document.getElementById("jobsBody");
+    const jobsAllRepos = document.getElementById("jobsAllRepos");
     let selected = cards[0] || null;
     let detailIssue = null;
     let confirmDuplicate = false;
     let draggedCard = null;
     let toastTimer = 0;
+    let jobsTimer = 0;
+    let currentJobs = [];
     let programmaticReload = false;
     const pendingDispatchKey = "kanban.pendingDispatchIssue";
     const autoRefreshInterval = 30000;
@@ -745,6 +864,127 @@
     function agentText(issue) {
       if (!issue.agent) return "No active dispatch";
       return `${issue.agent.runner} / ${issue.agent.mode} / ${issue.agent.status}`;
+    }
+
+    function statusIcon(status) {
+      if (status === "running") return "↻";
+      if (status === "passed" || status === "completed") return "✓";
+      if (status === "failed") return "✗";
+      return "⏸";
+    }
+
+    function cardStatus(status) {
+      return status === "pending" ? "dispatched" : status;
+    }
+
+    function terminalStatus(status) {
+      return status === "passed" || status === "completed" || status === "failed";
+    }
+
+    function formatCell(value) {
+      return value ? String(value) : "—";
+    }
+
+    function renderCardAgent(issueNumber, agent) {
+      const card = document.querySelector(`.card[data-issue="${issueNumber}"]`);
+      if (!card) return;
+      let status = card.querySelector(".agent-status");
+      if (!status) {
+        status = document.createElement("div");
+        status.className = "agent-status";
+        const titleNode = card.querySelector(".issue-title");
+        titleNode.insertAdjacentElement("afterend", status);
+      }
+      const displayStatus = cardStatus(agent.status || "dispatched");
+      status.innerHTML = "";
+      const dot = document.createElement("span");
+      dot.className = `agent-dot ${displayStatus}`;
+      dot.textContent = displayStatus === "passed" || displayStatus === "completed" ? "○" : "●";
+      const text = document.createElement("span");
+      text.textContent = `${agent.runner || "agent"} / ${agent.mode || "implement"} / ${displayStatus}`;
+      status.append(dot, text);
+    }
+
+    function updateIssueAgent(job) {
+      if (!job.issue) return;
+      if (job.repo && job.repo !== boardData.repo.slug) return;
+      const issue = issueByNumber.get(Number(job.issue));
+      if (!issue) return;
+      issue.agent = {
+        runner: job.runner,
+        mode: job.mode,
+        status: cardStatus(job.status),
+        dispatched_at: job.started
+      };
+      renderCardAgent(job.issue, issue.agent);
+    }
+
+    function renderJobs(jobs) {
+      currentJobs = jobs;
+      jobsBody.textContent = "";
+      jobsPanel.classList.toggle("open", jobs.length > 0);
+      jobs.forEach((job) => {
+        updateIssueAgent(job);
+        const row = document.createElement("tr");
+        [
+          formatCell(job.job),
+          formatCell(job.runner),
+          formatCell(job.repo),
+          "",
+          formatCell(job.started),
+          formatCell(job.ended),
+          formatCell(job.elapsed)
+        ].forEach((value, index) => {
+          const cell = document.createElement("td");
+          if (index === 3) {
+            const status = document.createElement("span");
+            status.className = `job-status ${job.status || "pending"}`;
+            const icon = document.createElement("span");
+            icon.textContent = statusIcon(job.status);
+            const text = document.createElement("span");
+            text.textContent = job.status || "pending";
+            status.append(icon, text);
+            cell.appendChild(status);
+          } else {
+            cell.textContent = value;
+          }
+          row.appendChild(cell);
+        });
+        jobsBody.appendChild(row);
+      });
+    }
+
+    async function refreshJobs(scheduleNext = true) {
+      clearTimeout(jobsTimer);
+      const params = jobsAllRepos.checked ? "all=1" : `repo=${encodeURIComponent(boardData.repo.slug)}`;
+      const response = await fetch(`/api/agent/jobs?${params}`);
+      if (!response.ok) return;
+      const jobs = await response.json();
+      renderJobs(jobs);
+      if (scheduleNext && jobs.length > 0 && jobs.some((job) => !terminalStatus(job.status))) {
+        jobsTimer = setTimeout(() => refreshJobs(true), 5000);
+      }
+    }
+
+    function addDispatchedJob(dispatch) {
+      const job = {
+        job: dispatch.job_id || "",
+        runner: dispatch.runner,
+        repo: dispatch.repo,
+        issue: dispatch.issue,
+        mode: dispatch.mode,
+        status: "pending",
+        started: dispatch.dispatched_at,
+        ended: "",
+        elapsed: "0s"
+      };
+      updateIssueAgent({ ...job, status: "dispatched" });
+      const withoutDuplicate = currentJobs.filter((existing) => {
+        if (existing.job && job.job) return existing.job !== job.job;
+        return !(existing.repo === job.repo && Number(existing.issue) === Number(job.issue));
+      });
+      renderJobs([job, ...withoutDuplicate]);
+      refreshJobs(true);
     }
 
     function openDetails(card) {
@@ -894,6 +1134,9 @@
     startAutoRefresh();
     renderFlowLines();
     openPendingDispatch();
+    refreshJobs(true);
+
+    jobsAllRepos.addEventListener("change", () => refreshJobs(true));
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "d" && !backdrop.classList.contains("open")) {
@@ -964,7 +1207,9 @@
           return;
         }
         message.textContent = result.manual ? "Manual command recorded. Copy and run it where needed." : "Dispatched.";
-        reloadBoard();
+        addDispatchedJob(result.dispatch);
+        showToast(message.textContent);
+        backdrop.classList.remove("open");
         return;
       }
       message.textContent = (await response.text()).trim();

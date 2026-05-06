@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmh-devel/kanban/internal/agent"
 	"github.com/jmh-devel/kanban/internal/github"
 	"github.com/jmh-devel/kanban/internal/repo"
 	"github.com/jmh-devel/kanban/internal/state"
@@ -137,6 +138,55 @@ func TestIndexRendersIssueDataForDetails(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("response missing %q:\n%s", want, body)
 		}
+	}
+}
+
+func TestHandleAgentJobsReturnsRepoDispatches(t *testing.T) {
+	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
+	started := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
+	if err := state.SaveDispatches([]state.Dispatch{
+		{
+			Repo:         "jmh-devel/example",
+			Issue:        24,
+			Runner:       "tsctl",
+			Mode:         "implement",
+			DispatchedAt: started,
+			Status:       state.StatusDispatched,
+		},
+		{
+			Repo:         "jmh-devel/other",
+			Issue:        25,
+			Runner:       "tsctl",
+			Mode:         "review",
+			DispatchedAt: started,
+			Status:       state.StatusDispatched,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(func(context.Context) (github.Board, error) {
+		return github.Board{Repo: repo.Details{Slug: "jmh-devel/example"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://example.com/api/agent/jobs?repo=jmh-devel/example", nil)
+	recorder := httptest.NewRecorder()
+	server.newMux().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", recorder.Code, recorder.Body.String())
+	}
+	var jobs []agent.JobRecord
+	if err := json.Unmarshal(recorder.Body.Bytes(), &jobs); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %+v", jobs)
+	}
+	if jobs[0].Repo != "jmh-devel/example" || jobs[0].Issue != 24 || jobs[0].Status != "pending" {
+		t.Fatalf("job = %+v", jobs[0])
 	}
 }
 

@@ -32,12 +32,17 @@
 
     header {
       padding: 24px 28px 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      column-gap: 20px;
+      align-items: start;
     }
 
     h1 {
       margin: 0;
       font-size: 2rem;
       letter-spacing: -0.04em;
+      grid-column: 1;
     }
 
     .meta {
@@ -46,6 +51,7 @@
       display: flex;
       gap: 16px;
       flex-wrap: wrap;
+      grid-column: 1;
     }
 
     .actions {
@@ -53,6 +59,47 @@
       display: flex;
       gap: 12px;
       flex-wrap: wrap;
+      grid-column: 1;
+    }
+
+    .active-jobs-card {
+      grid-column: 2;
+      grid-row: 1 / span 3;
+      justify-self: end;
+      min-width: 140px;
+      max-width: min(320px, 34vw);
+      border: 1px solid var(--accent, #4a90e2);
+      border-radius: 6px;
+      padding: 4px 10px;
+      background: var(--panel);
+      color: var(--ink);
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
+    .active-jobs-card:focus-visible {
+      outline: 3px solid rgba(196, 91, 45, 0.28);
+      outline-offset: 2px;
+    }
+
+    .active-jobs-label {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--muted);
+      font-size: 0.65rem;
+      text-transform: uppercase;
+    }
+
+    .active-jobs-card ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .active-jobs-card li {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .button {
@@ -546,6 +593,15 @@
     @media (max-width: 700px) {
       header {
         padding: 20px 16px 8px;
+        grid-template-columns: 1fr;
+      }
+
+      .active-jobs-card {
+        grid-column: 1;
+        grid-row: auto;
+        justify-self: stretch;
+        max-width: none;
+        margin-top: 14px;
       }
 
       main {
@@ -570,6 +626,10 @@
       <button type="button" id="refreshBoard">Refresh</button>
       <a class="button secondary" href="/api/board">JSON</a>
       {{ if .Repo.WebURL }}<a class="button secondary" href="{{ .Repo.WebURL }}">Origin</a>{{ end }}
+    </div>
+    <div id="activeJobsCard" class="active-jobs-card" role="button" tabindex="0" style="display:none">
+      <span class="active-jobs-label">active jobs</span>
+      <ul id="activeJobsList"></ul>
     </div>
   </header>
   <main>
@@ -765,6 +825,8 @@
     const jobsPanel = document.getElementById("jobsPanel");
     const jobsBody = document.getElementById("jobsBody");
     const jobsAllRepos = document.getElementById("jobsAllRepos");
+    const activeJobsCard = document.getElementById("activeJobsCard");
+    const activeJobsList = document.getElementById("activeJobsList");
     let selected = cards[0] || null;
     let detailIssue = null;
     let confirmDuplicate = false;
@@ -929,6 +991,23 @@
       return value ? String(value) : "—";
     }
 
+    function updateActiveJobsCard(jobs) {
+      const activeJobs = jobs.filter((job) => {
+        return job.repo === boardData.repo.slug && (job.status === "running" || job.status === "pending");
+      });
+      activeJobsList.textContent = "";
+      if (activeJobs.length === 0) {
+        activeJobsCard.style.display = "none";
+        return;
+      }
+      activeJobs.forEach((job) => {
+        const item = document.createElement("li");
+        item.textContent = `↻ #${formatCell(job.issue)} ${formatCell(job.runner)}  ${job.elapsed || ""}`.trim();
+        activeJobsList.appendChild(item);
+      });
+      activeJobsCard.style.display = "";
+    }
+
     function renderCardAgent(issueNumber, agent) {
       const card = document.querySelector(`.card[data-issue="${issueNumber}"]`);
       if (!card) return;
@@ -967,6 +1046,7 @@
       currentJobs = jobs;
       jobsBody.textContent = "";
       jobsPanel.classList.toggle("open", jobs.length > 0);
+      updateActiveJobsCard(jobs);
       jobs.forEach((job) => {
         updateIssueAgent(job);
         const row = document.createElement("tr");
@@ -1182,6 +1262,17 @@
     refreshJobs(true);
 
     jobsAllRepos.addEventListener("change", () => refreshJobs(true));
+
+    activeJobsCard.addEventListener("click", () => {
+      jobsPanel.classList.add("open");
+      jobsPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+
+    activeJobsCard.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      activeJobsCard.click();
+    });
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "d" && !backdrop.classList.contains("open")) {

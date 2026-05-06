@@ -345,6 +345,7 @@
       align-items: center;
       justify-content: center;
       padding: 18px;
+      z-index: 100;
     }
 
     .modal-backdrop.open {
@@ -421,10 +422,43 @@
       color: var(--ink);
     }
 
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
     .message {
       color: var(--muted);
       font-size: 0.88rem;
       min-height: 1.2rem;
+    }
+
+    .warning {
+      display: none;
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid #d6a11d;
+      border-radius: 6px;
+      background: #fff4ce;
+      color: #4d3800;
+      font-size: 0.9rem;
+      line-height: 1.4;
+    }
+
+    .warning.open {
+      display: block;
+    }
+
+    .warning code {
+      display: block;
+      margin-top: 6px;
+      padding: 8px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.65);
+      color: var(--ink);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.84rem;
+      overflow-x: auto;
     }
 
     .detail-grid {
@@ -497,7 +531,7 @@
       <span>Updated: {{ .UpdatedAt.Format "2006-01-02 15:04:05 UTC" }}</span>
     </div>
     <div class="actions">
-      <a class="button" href="/">Refresh</a>
+      <button type="button" id="refreshBoard">Refresh</button>
       <a class="button secondary" href="/api/board">JSON</a>
       {{ if .Repo.WebURL }}<a class="button secondary" href="{{ .Repo.WebURL }}">Origin</a>{{ end }}
     </div>
@@ -635,6 +669,7 @@
   <div class="modal-backdrop" id="dispatchBackdrop">
     <form class="modal" id="dispatchForm">
       <h2 id="dispatchTitle">Dispatch</h2>
+      <div class="warning" id="dispatchWarning" role="alert"></div>
       <div class="field">
         <label for="runner">Runner</label>
         <select id="runner" name="runner"></select>
@@ -667,6 +702,7 @@
     const columns = Array.from(document.querySelectorAll(".column[data-lane]"));
     const toast = document.getElementById("toast");
     const standaloneSession = "{{ .StandaloneSession }}";
+    const standalonePayload = JSON.stringify({ session: standaloneSession });
     const backdrop = document.getElementById("dispatchBackdrop");
     const form = document.getElementById("dispatchForm");
     const title = document.getElementById("dispatchTitle");
@@ -675,6 +711,7 @@
     const repoKey = document.getElementById("repoKey");
     const preview = document.getElementById("commandPreview");
     const message = document.getElementById("dispatchMessage");
+    const dispatchWarning = document.getElementById("dispatchWarning");
     const confirmButton = document.getElementById("confirmDispatch");
     const detailBackdrop = document.getElementById("detailBackdrop");
     const detailTitle = document.getElementById("detailTitle");
@@ -696,6 +733,7 @@
     let currentJobs = [];
     let programmaticReload = false;
     const pendingDispatchKey = "kanban.pendingDispatchIssue";
+    const autoRefreshInterval = 30000;
     const laneValues = {
       "Backlog": "backlog",
       "In Progress": "in-progress",
@@ -723,31 +761,36 @@
       toastTimer = setTimeout(() => toast.classList.remove("open"), 4200);
     }
 
+    function sendStandaloneHeartbeat(useBeacon = false) {
+      if (!standaloneSession) return;
+      if (useBeacon && navigator.sendBeacon) {
+        navigator.sendBeacon("/api/standalone/heartbeat", standalonePayload);
+        return;
+      }
+      fetch("/api/standalone/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: standalonePayload,
+        keepalive: useBeacon
+      }).catch(() => {});
+    }
+
     function startStandaloneSessionHeartbeat() {
       if (!standaloneSession) return;
 
-      const payload = JSON.stringify({ session: standaloneSession });
-      const sendHeartbeat = () => {
-        fetch("/api/standalone/heartbeat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: payload
-        }).catch(() => {});
-      };
-
-      sendHeartbeat();
-      const timer = setInterval(sendHeartbeat, 2000);
+      sendStandaloneHeartbeat();
+      const timer = setInterval(sendStandaloneHeartbeat, 2000);
       window.addEventListener("beforeunload", () => {
         clearInterval(timer);
         if (programmaticReload) return;
         if (navigator.sendBeacon) {
-          navigator.sendBeacon("/api/standalone/close", payload);
+          navigator.sendBeacon("/api/standalone/close", standalonePayload);
           return;
         }
         fetch("/api/standalone/close", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: payload,
+          body: standalonePayload,
           keepalive: true
         }).catch(() => {});
       });
@@ -763,6 +806,7 @@
     function reloadBoard(delay = 0) {
       window.setTimeout(() => {
         programmaticReload = true;
+        sendStandaloneHeartbeat(true);
         window.location.reload();
       }, delay);
     }
@@ -776,6 +820,33 @@
         option.selected = value === current;
         select.appendChild(option);
       });
+    }
+
+    function repoKeyCommand(repo) {
+      return `kanban config set-repo-key --repo ${repo} --repo-key NAME`;
+    }
+
+    function setDispatchOptions(options) {
+      const error = (options.error || "").trim();
+      const missingRepoKey = !(options.repo_key || "").trim();
+
+      repoKey.value = options.repo_key || "";
+      preview.value = options.preview || "";
+      message.textContent = missingRepoKey ? "" : error;
+      confirmButton.disabled = missingRepoKey;
+
+      dispatchWarning.textContent = "";
+      dispatchWarning.classList.toggle("open", missingRepoKey || Boolean(error));
+      if (missingRepoKey) {
+        dispatchWarning.append("⚠ This repo has no agent config. Run:");
+        const code = document.createElement("code");
+        code.textContent = repoKeyCommand(options.repo || "");
+        dispatchWarning.appendChild(code);
+        return;
+      }
+      if (error) {
+        dispatchWarning.textContent = error;
+      }
     }
 
     function labelsText(issue) {
@@ -958,9 +1029,7 @@
       const options = await response.json();
       setOptions(runner, options.runners, options.runner);
       setOptions(mode, options.modes, options.mode);
-      repoKey.value = options.repo_key || options.repo;
-      preview.value = options.preview || "";
-      message.textContent = options.error || "";
+      setDispatchOptions(options);
       confirmButton.textContent = runner.value === "manual" ? "Record manual" : "Dispatch";
       backdrop.classList.add("open");
     }
@@ -971,13 +1040,33 @@
         issue = sessionStorage.getItem(pendingDispatchKey) || "";
         sessionStorage.removeItem(pendingDispatchKey);
       } catch (error) {
+        showToast("Could not open dispatch - browser storage is unavailable.", true);
         return;
       }
       if (!issue) return;
       const card = cards.find((candidate) => candidate.dataset.issue === issue);
-      if (!card || laneValues[card.dataset.lane] !== "in-progress") return;
+      if (!card) {
+        showToast("Could not open dispatch - card not found after reload.", true);
+        return;
+      }
+      if (laneValues[card.dataset.lane] !== "in-progress") {
+        showToast("Could not open dispatch - card is no longer in In Progress.", true);
+        return;
+      }
       selectCard(card);
       openDispatch();
+    }
+
+    function hasActiveDispatch() {
+      return issues.some((issue) => issue.agent && issue.agent.status === "dispatched");
+    }
+
+    function startAutoRefresh() {
+      if (!hasActiveDispatch()) return;
+      window.setInterval(() => {
+        if (backdrop.classList.contains("open") || detailBackdrop.classList.contains("open") || draggedCard) return;
+        reloadBoard();
+      }, autoRefreshInterval);
     }
 
     async function refreshPreview() {
@@ -986,8 +1075,7 @@
       const params = new URLSearchParams({ issue, runner: runner.value, mode: mode.value });
       const response = await fetch(`/api/dispatch/options?${params}`);
       const options = await response.json();
-      preview.value = options.preview || "";
-      message.textContent = options.error || "";
+      setDispatchOptions(options);
     }
 
     cards.forEach((card) => {
@@ -1043,6 +1131,7 @@
 
     selectCard(selected);
     startStandaloneSessionHeartbeat();
+    startAutoRefresh();
     renderFlowLines();
     openPendingDispatch();
     refreshJobs(true);
@@ -1071,8 +1160,13 @@
 
     document.getElementById("detailMove").addEventListener("click", async () => {
       if (!selected || !detailIssue) return;
+      detailMessage.textContent = "";
       const targetColumn = columns.find((column) => laneValues[column.dataset.lane] === detailLane.value);
       await moveCard(selected, detailLane.value, targetColumn, detailMessage);
+    });
+
+    document.getElementById("refreshBoard").addEventListener("click", () => {
+      reloadBoard();
     });
 
     document.getElementById("cancelDispatch").addEventListener("click", () => {
@@ -1092,6 +1186,7 @@
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (confirmButton.disabled) return;
       if (!selected) return;
       const response = await fetch("/api/dispatch", {
         method: "POST",
@@ -1121,7 +1216,14 @@
     });
 
     async function moveCard(card, lane, targetColumn, statusNode = null) {
-      if (!lane || !targetColumn || laneValues[card.dataset.lane] === lane) return;
+      if (statusNode) statusNode.textContent = "";
+      if (!lane || !targetColumn) return;
+      if (laneValues[card.dataset.lane] === lane) {
+        const text = `Already in ${targetColumn.dataset.lane}.`;
+        if (statusNode) statusNode.textContent = text;
+        showToast(text);
+        return;
+      }
       const sourceParent = card.parentElement;
       const sourceNext = card.nextElementSibling;
       const issue = Number(card.dataset.issue);

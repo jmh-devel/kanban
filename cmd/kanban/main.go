@@ -329,6 +329,8 @@ func runServe(args []string) int {
 		return 2
 	}
 
+	ensureLabels(context.Background(), *repoPath, *repoSlug)
+
 	server, err := web.NewServer(func(ctx context.Context) (ghclient.Board, error) {
 		return loadBoard(ctx, *repoPath, *repoSlug, ghclient.BoardOptions{
 			DoneWindowDays:   *doneWindowDays,
@@ -353,10 +355,12 @@ func runOpen(args []string) int {
 	repoPath := fs.String("path", ".", "path inside the target git repository")
 	doneWindowDays := fs.Int("done-window-days", ghclient.DefaultDoneDays, "days of closed issues to show in Done")
 	groupByMilestone := fs.Bool("group-by-milestone", false, "preserve milestone grouping metadata within lanes")
-	idleTimeout := fs.Duration("idle-timeout", 10*time.Second, "how long after browser close/idle to stop standalone server")
+	idleTimeout := fs.Duration("idle-timeout", 30*time.Second, "how long after browser close/idle to stop standalone server")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+
+	ensureLabels(context.Background(), *repoPath, *repoSlug)
 
 	addr, err := findFreeAddr()
 	if err != nil {
@@ -534,13 +538,31 @@ func loadBoard(ctx context.Context, startPath string, repoSlug string, options g
 	return client.LoadBoardWithOptions(ctx, details, options)
 }
 
+// ensureLabels runs a pre-flight check before the web server starts: it
+// detects the current repo slug and creates any missing kanban lane labels.
+// Failures are non-fatal — a warning is printed and the server still starts.
+func ensureLabels(ctx context.Context, startPath, repoSlug string) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	details, err := repo.Detect(ctx, startPath, repoSlug)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kanban: label pre-flight: could not detect repo: %v\n", err)
+		return
+	}
+	fmt.Printf("kanban: checking lane labels for %s...\n", details.Slug)
+	if err := initcmd.EnsureLaneLabels(ctx, details.Slug, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "kanban: label pre-flight warning: %v\n", err)
+	}
+}
+
 func printUsage() {
 	fmt.Println(`kanban: lightweight GitHub board CLI
 
 Usage:
 	kanban init [--path DIR] [--owner ORG] [--name REPO] [--remote NAME] [--visibility public|private] [--apply] [--setup-labels]
 	kanban tui [--path DIR] [--repo owner/repo] [--addr HOST:PORT]
-	kanban open [--path DIR] [--repo owner/repo] [--idle-timeout 10s]
+	kanban open [--path DIR] [--repo owner/repo] [--idle-timeout 30s]
   kanban [print] [--path DIR] [--repo owner/repo] [--done-window-days N]
   kanban json [--path DIR] [--repo owner/repo] [--done-window-days N]
   kanban serve [--addr HOST:PORT] [--path DIR] [--repo owner/repo] [--done-window-days N]

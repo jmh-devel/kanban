@@ -99,6 +99,27 @@ func AppendDispatch(dispatches []Dispatch, dispatch Dispatch, supersedeExisting 
 	return append(dispatches, dispatch)
 }
 
+func MarkActiveDispatches(repo string, issue int, status string) (bool, error) {
+	dispatches, err := LoadDispatches()
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	for i := range dispatches {
+		if dispatches[i].Repo == repo && dispatches[i].Issue == issue && IsActiveStatus(dispatches[i].Status) {
+			dispatches[i].Status = status
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := SaveDispatches(dispatches); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func IsActiveStatus(status string) bool {
 	status = strings.TrimSpace(status)
 	return status == "" || status == StatusDispatched

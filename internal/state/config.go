@@ -14,7 +14,8 @@ const (
 	ConfigFileName     = "config.json"
 	DispatchesFileName = "dispatches.json"
 
-	DefaultRunner = "manual"
+	DefaultRunner = "codex"
+	ManualRunner  = "manual"
 	DefaultMode   = "implement"
 )
 
@@ -120,20 +121,30 @@ func SaveConfig(config Config) error {
 
 func (c Config) RunnerNames() []string {
 	names := make([]string, 0, len(c.Runners)+1)
+	seen := map[string]bool{}
 	for name := range c.Runners {
 		names = append(names, name)
+		seen[name] = true
 	}
 	sort.Strings(names)
-	names = append(names, DefaultRunner)
+	if !seen[DefaultRunner] {
+		names = append(names, DefaultRunner)
+	}
+	if !seen[ManualRunner] {
+		names = append(names, ManualRunner)
+	}
 	return names
 }
 
 func (c Config) Runner(name string) RunnerConfig {
-	if name == DefaultRunner || len(c.Runners) == 0 {
-		return RunnerConfig{Kind: DefaultRunner}
+	if name == ManualRunner {
+		return RunnerConfig{Kind: ManualRunner}
 	}
 	runner, ok := c.Runners[name]
 	if !ok {
+		if name == DefaultRunner {
+			return RunnerConfig{Kind: "local_cli", Command: DefaultRunner}
+		}
 		return RunnerConfig{}
 	}
 	return runner

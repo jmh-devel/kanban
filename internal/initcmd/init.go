@@ -153,6 +153,14 @@ var laneLabels = []laneLabel{
 	{Name: "kanban:review", Color: "e4e669", Description: "Kanban lane: Review"},
 }
 
+// EnsureLaneLabels checks that the kanban lane labels exist in the given repo
+// (owner/name slug) and creates any that are missing. It writes a one-line
+// progress note to stdout for each label it inspects. Errors are returned so
+// callers can decide whether to treat them as fatal or just log a warning.
+func EnsureLaneLabels(ctx context.Context, slug string, stdout io.Writer) error {
+	return setupLaneLabels(ctx, defaultRunner, slug, stdout)
+}
+
 func setupLaneLabels(ctx context.Context, runner commandRunner, slug string, stdout io.Writer) error {
 	out, err := runner(ctx, "gh", "label", "list", "--repo", slug, "--limit", "1000", "--json", "name")
 	if err != nil {

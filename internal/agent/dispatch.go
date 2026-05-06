@@ -196,7 +196,60 @@ func runShell(ctx context.Context, command string) error {
 }
 
 func moveIssueToInProgress(ctx context.Context, repo string, issue int) error {
+	return moveIssueToInProgressWithRunner(ctx, repo, issue, runGH)
+}
+
+type ghRunner func(context.Context, ...string) error
+
+func moveIssueToInProgressWithRunner(ctx context.Context, repo string, issue int, runner ghRunner) error {
 	args := []string{"issue", "edit", strconv.Itoa(issue), "--repo", repo, "--remove-label", "kanban:review", "--add-label", "kanban:in-progress"}
+	if err := runner(ctx, args...); err == nil {
+		return nil
+	} else if missingLabelError(err, "kanban:review") {
+		return addIssueToInProgress(ctx, repo, issue, runner)
+	} else if missingLabelError(err, "kanban:in-progress") {
+		if err := ensureInProgressLabel(ctx, repo, runner); err != nil {
+			return fmt.Errorf("move issue to In Progress: %w", err)
+		}
+		if err := runner(ctx, args...); err == nil {
+			return nil
+		} else if missingLabelError(err, "kanban:review") {
+			return addIssueToInProgress(ctx, repo, issue, runner)
+		} else {
+			return fmt.Errorf("move issue to In Progress: %w", err)
+		}
+	} else {
+		return fmt.Errorf("move issue to In Progress: %w", err)
+	}
+}
+
+func addIssueToInProgress(ctx context.Context, repo string, issue int, runner ghRunner) error {
+	args := []string{"issue", "edit", strconv.Itoa(issue), "--repo", repo, "--add-label", "kanban:in-progress"}
+	if err := runner(ctx, args...); err != nil {
+		if missingLabelError(err, "kanban:in-progress") {
+			if createErr := ensureInProgressLabel(ctx, repo, runner); createErr != nil {
+				return fmt.Errorf("move issue to In Progress: %w", createErr)
+			}
+			if retryErr := runner(ctx, args...); retryErr == nil {
+				return nil
+			} else {
+				return fmt.Errorf("move issue to In Progress: %w", retryErr)
+			}
+		}
+		return fmt.Errorf("move issue to In Progress: %w", err)
+	}
+	return nil
+}
+
+func ensureInProgressLabel(ctx context.Context, repo string, runner ghRunner) error {
+	args := []string{"label", "create", "kanban:in-progress", "--repo", repo, "--color", "0075ca", "--description", "Kanban lane: In Progress"}
+	if err := runner(ctx, args...); err != nil && !labelAlreadyExistsError(err) {
+		return err
+	}
+	return nil
+}
+
+func runGH(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -205,9 +258,18 @@ func moveIssueToInProgress(ctx context.Context, repo string, issue int) error {
 		if message == "" {
 			message = err.Error()
 		}
-		return fmt.Errorf("move issue to In Progress: %w", errors.New(message))
+		return errors.New(message)
 	}
 	return nil
+}
+
+func missingLabelError(err error, label string) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, strings.ToLower(label)) && strings.Contains(message, "not found")
+}
+
+func labelAlreadyExistsError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "already exists")
 }
 
 func ResolveReposFile(configured string) string {

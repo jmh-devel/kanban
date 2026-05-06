@@ -202,10 +202,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case dispatchMsg:
 		if msg.err != nil {
+			m.mode = modeDispatch
 			m.flash("dispatch failed: " + msg.err.Error())
 			return m, nil
 		}
 		if msg.result.Duplicate != nil {
+			m.mode = modeDispatch
 			m.dispatch.confirmDuplicate = true
 			m.dispatch.duplicate = msg.result.Duplicate
 			m.flash(fmt.Sprintf("already dispatched to %s; press Enter again to re-dispatch", msg.result.Duplicate.Runner))
@@ -252,7 +254,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.moveIndex = (m.moveIndex + 1) % len(laneNames)
 		case "shift+tab", "left", "h", "k", "up":
 			m.moveIndex = (m.moveIndex + len(laneNames) - 1) % len(laneNames)
-		case "enter":
+		case "enter", "ctrl+m", "ctrl+j":
 			issue, ok := m.currentIssue()
 			if !ok {
 				m.mode = modeBoard
@@ -291,12 +293,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.dispatch.modeIndex = (m.dispatch.modeIndex + len(modes) - 1) % len(modes)
 			m.dispatch.confirmDuplicate = false
 			m.dispatch.duplicate = nil
-		case "enter":
+		case "enter", "ctrl+m", "ctrl+j":
 			issue, ok := m.currentIssue()
 			if !ok {
 				m.mode = modeBoard
 				return m, nil
 			}
+			m.mode = modeBoard
+			m.flash(fmt.Sprintf("dispatching #%d", issue.Number))
 			return m, m.dispatchIssue(issue)
 		}
 		return m, nil
@@ -322,7 +326,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selected[m.focusColumn] = 0
 	case "end", "G":
 		m.selected[m.focusColumn] = max(0, len(m.columns[m.focusColumn].issues)-1)
-	case "enter":
+	case "enter", "ctrl+m", "ctrl+j":
 		m.openExpand()
 	case "d":
 		if _, ok := m.currentIssue(); ok {

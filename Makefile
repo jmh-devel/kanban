@@ -46,6 +46,9 @@ deb: build
 
 install: deb
 	sudo dpkg -i $(DEB_DIR)/$(APP)_$(DEB_VERSION).deb
+	@if [ -d /usr/local/bin ]; then \
+		sudo ln -sf /usr/bin/$(APP) /usr/local/bin/$(APP); \
+	fi
 
 run:
 	go run $(PKG) serve

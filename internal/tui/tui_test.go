@@ -166,6 +166,9 @@ func TestDispatchEnterCallsBackend(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("dispatch enter returned nil command")
 	}
+	if got := updated.(model).mode; got != modeBoard {
+		t.Fatalf("mode immediately after enter = %v, want board", got)
+	}
 	updated, _ = updated.Update(cmd())
 	got := updated.(model)
 	if !called {
@@ -177,6 +180,42 @@ func TestDispatchEnterCallsBackend(t *testing.T) {
 	issue := got.columns[0].issues[0]
 	if issue.Agent == nil || issue.Agent.Runner != "tsctl" || issue.Agent.Mode != "implement" {
 		t.Fatalf("issue agent status not updated: %#v", issue.Agent)
+	}
+}
+
+func TestDispatchEnterAliasesCallBackend(t *testing.T) {
+	board := github.Board{
+		Repo:      repo.Details{Slug: "jmh-devel/example"},
+		UpdatedAt: time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC),
+		Sections:  []github.Section{{Title: "Backlog", Issues: []github.Issue{{Number: 318, Title: "Build dispatch"}}}},
+	}
+	config := state.DefaultConfig()
+	config.Repos = map[string]state.RepoConfig{
+		"jmh-devel/example": {RepoKey: "example", PreferredRunner: "tsctl", PreferredMode: "implement"},
+	}
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyCtrlM},
+		{Type: tea.KeyCtrlJ},
+	} {
+		called := false
+		dispatcher := func(_ context.Context, _ state.Config, _ agent.Request) (agent.Result, error) {
+			called = true
+			return agent.Result{}, nil
+		}
+		m := newModelWithConfig(board, nil, nil, dispatcher, config)
+		m.mode = modeDispatch
+
+		updated, cmd := m.handleKey(key)
+		if cmd == nil {
+			t.Fatalf("%q returned nil command", key.String())
+		}
+		if got := updated.(model).mode; got != modeBoard {
+			t.Fatalf("%q mode = %v, want board", key.String(), got)
+		}
+		_, _ = updated.Update(cmd())
+		if !called {
+			t.Fatalf("%q did not call dispatcher", key.String())
+		}
 	}
 }
 

@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -201,5 +203,84 @@ func TestDuplicateDispatchRequiresConfirmation(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(configDir, state.DispatchesFileName)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMoveIssueToInProgressRetriesWhenReviewLabelIsMissing(t *testing.T) {
+	var calls []string
+	runner := func(_ context.Context, args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		if len(calls) == 1 {
+			return errors.New("'kanban:review' not found")
+		}
+		return nil
+	}
+
+	err := moveIssueToInProgressWithRunner(context.Background(), "jmh-devel/kanban", 15, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"issue edit 15 --repo jmh-devel/kanban --remove-label kanban:review --add-label kanban:in-progress",
+		"issue edit 15 --repo jmh-devel/kanban --add-label kanban:in-progress",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestMoveIssueToInProgressCreatesInProgressLabelWhenMissing(t *testing.T) {
+	var calls []string
+	runner := func(_ context.Context, args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		if len(calls) == 1 {
+			return errors.New("'kanban:in-progress' not found")
+		}
+		return nil
+	}
+
+	err := moveIssueToInProgressWithRunner(context.Background(), "jmh-devel/kanban", 15, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"issue edit 15 --repo jmh-devel/kanban --remove-label kanban:review --add-label kanban:in-progress",
+		"label create kanban:in-progress --repo jmh-devel/kanban --color 0075ca --description Kanban lane: In Progress",
+		"issue edit 15 --repo jmh-devel/kanban --remove-label kanban:review --add-label kanban:in-progress",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}
+
+func TestMoveIssueToInProgressCreatesInProgressLabelAfterReviewFallback(t *testing.T) {
+	var calls []string
+	runner := func(_ context.Context, args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		switch len(calls) {
+		case 1:
+			return errors.New("'kanban:review' not found")
+		case 2:
+			return errors.New("'kanban:in-progress' not found")
+		default:
+			return nil
+		}
+	}
+
+	err := moveIssueToInProgressWithRunner(context.Background(), "jmh-devel/kanban", 15, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"issue edit 15 --repo jmh-devel/kanban --remove-label kanban:review --add-label kanban:in-progress",
+		"issue edit 15 --repo jmh-devel/kanban --add-label kanban:in-progress",
+		"label create kanban:in-progress --repo jmh-devel/kanban --color 0075ca --description Kanban lane: In Progress",
+		"issue edit 15 --repo jmh-devel/kanban --add-label kanban:in-progress",
+	}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
 	}
 }

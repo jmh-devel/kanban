@@ -75,7 +75,7 @@ func (d Dispatcher) Dispatch(ctx context.Context, config state.Config, request R
 	if existing, ok := state.ActiveDispatch(dispatches, request.Repo, request.Issue); ok && !request.ConfirmDuplicate {
 		return Result{
 			Command: command,
-			Manual:  request.Runner == state.DefaultRunner,
+			Manual:  request.Runner == state.ManualRunner,
 			Duplicate: &Duplicate{
 				Runner:       existing.Runner,
 				Mode:         existing.Mode,
@@ -84,7 +84,7 @@ func (d Dispatcher) Dispatch(ctx context.Context, config state.Config, request R
 		}, nil
 	}
 
-	manual := request.Runner == state.DefaultRunner
+	manual := request.Runner == state.ManualRunner
 	if !manual {
 		if d.ExecCommand == nil {
 			d.ExecCommand = runShell
@@ -127,14 +127,14 @@ func (d Dispatcher) Dispatch(ctx context.Context, config state.Config, request R
 
 func BuildCommand(config state.Config, repo string, issue int, runnerName string, mode string) (string, error) {
 	runner := config.Runner(runnerName)
-	if runnerName != state.DefaultRunner && runner.Kind == "" {
+	if runnerName != state.ManualRunner && runner.Kind == "" {
 		return "", fmt.Errorf("runner %q is not configured", runnerName)
 	}
 	repoConfig := config.Repos[repo]
 	reposFile := ResolveReposFile(repoConfig.ReposFile)
 
 	switch runner.Kind {
-	case state.DefaultRunner:
+	case state.ManualRunner:
 		target := repoConfig.RepoKey
 		if target == "" {
 			target = repo

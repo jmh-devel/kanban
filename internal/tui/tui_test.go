@@ -134,6 +134,39 @@ func TestBuildDispatchCommand(t *testing.T) {
 	}
 }
 
+func TestDispatchDefaultsToCodex(t *testing.T) {
+	board := github.Board{
+		Repo:     repo.Details{Slug: "jmh-devel/example"},
+		Sections: []github.Section{{Title: "Backlog", Issues: []github.Issue{{Number: 318, Title: "Build dispatch"}}}},
+	}
+	config := state.DefaultConfig()
+	config.Repos = map[string]state.RepoConfig{"jmh-devel/example": {RepoKey: "example"}}
+
+	m := newModelWithConfig(board, nil, nil, nil, config)
+	runners := m.dispatchRunners()
+	if got := runners[m.dispatch.runnerIndex]; got != state.DefaultRunner {
+		t.Fatalf("default runner = %q, want %q", got, state.DefaultRunner)
+	}
+	if state.DefaultRunner != "codex" {
+		t.Fatalf("DefaultRunner = %q, want codex", state.DefaultRunner)
+	}
+}
+
+func TestDispatchUsesPreferredRunner(t *testing.T) {
+	board := github.Board{
+		Repo:     repo.Details{Slug: "jmh-devel/example"},
+		Sections: []github.Section{{Title: "Backlog", Issues: []github.Issue{{Number: 318, Title: "Build dispatch"}}}},
+	}
+	config := state.DefaultConfig()
+	config.Repos = map[string]state.RepoConfig{"jmh-devel/example": {PreferredRunner: "tsctl"}}
+
+	m := newModelWithConfig(board, nil, nil, nil, config)
+	runners := m.dispatchRunners()
+	if got := runners[m.dispatch.runnerIndex]; got != "tsctl" {
+		t.Fatalf("default runner = %q, want tsctl", got)
+	}
+}
+
 func TestDispatchEnterCallsBackend(t *testing.T) {
 	board := github.Board{
 		Repo:      repo.Details{Slug: "jmh-devel/example"},

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/jmh-devel/kanban/internal/github"
 	"github.com/jmh-devel/kanban/internal/repo"
+	"github.com/jmh-devel/kanban/internal/state"
 )
 
 func TestHandleIssueMoveCallsMover(t *testing.T) {
@@ -99,4 +101,81 @@ func TestIndexRendersIssueDataForDetails(t *testing.T) {
 			t.Fatalf("response missing %q:\n%s", want, body)
 		}
 	}
+}
+
+func TestDispatchOptionsDefaultToCodex(t *testing.T) {
+	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
+	server, err := NewServer(func(context.Context) (github.Board, error) {
+		return github.Board{Repo: repo.Details{Slug: "jmh-devel/example"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://example.com/api/dispatch/options?issue=42", nil)
+	recorder := httptest.NewRecorder()
+	server.newMux().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Runner  string   `json:"runner"`
+		Runners []string `json:"runners"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Runner != state.DefaultRunner {
+		t.Fatalf("runner = %q, want %q", response.Runner, state.DefaultRunner)
+	}
+	if state.DefaultRunner != "codex" {
+		t.Fatalf("DefaultRunner = %q, want codex", state.DefaultRunner)
+	}
+	if !contains(response.Runners, state.ManualRunner) {
+		t.Fatalf("runners = %v, missing manual", response.Runners)
+	}
+}
+
+func TestDispatchOptionsUsePreferredRunner(t *testing.T) {
+	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
+	config := state.DefaultConfig()
+	config.Repos = map[string]state.RepoConfig{
+		"jmh-devel/example": {PreferredRunner: "tsctl"},
+	}
+	if err := state.SaveConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(func(context.Context) (github.Board, error) {
+		return github.Board{Repo: repo.Details{Slug: "jmh-devel/example"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://example.com/api/dispatch/options?issue=42", nil)
+	recorder := httptest.NewRecorder()
+	server.newMux().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Runner string `json:"runner"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Runner != "tsctl" {
+		t.Fatalf("runner = %q, want tsctl", response.Runner)
+	}
+}
+
+func contains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }

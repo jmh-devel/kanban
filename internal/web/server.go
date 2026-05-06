@@ -157,6 +157,7 @@ func (s *Server) newMux() *http.ServeMux {
 	mux.HandleFunc("/api/issues/move", s.handleIssueMove)
 	mux.HandleFunc("/api/dispatch/options", s.handleDispatchOptions)
 	mux.HandleFunc("/api/dispatch", s.handleDispatch)
+	mux.HandleFunc("/api/agent/jobs", s.handleAgentJobs)
 	mux.HandleFunc("/api/standalone/heartbeat", s.handleStandaloneHeartbeat)
 	mux.HandleFunc("/api/standalone/close", s.handleStandaloneClose)
 	mux.HandleFunc("/healthz", s.handleHealth)
@@ -295,6 +296,30 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, result)
+}
+
+func (s *Server) handleAgentJobs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if repo == "" && r.URL.Query().Get("all") != "1" {
+		board, err := s.loader(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		repo = board.Repo.Slug
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	jobs, err := agent.ListJobs(ctx, repo, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, jobs)
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {

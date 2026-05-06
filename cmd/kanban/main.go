@@ -580,7 +580,9 @@ Behavior:
 	- open starts a temporary local web UI, launches your browser, and exits when the window closes
   - defaults to the git repository under the current working directory
   - resolves the GitHub slug from remote.origin.url unless --repo is provided
-  - uses GitHub labels as the source of truth for board lanes`)
+  - uses GitHub labels as the source of truth for board lanes
+  - config supports review_agent.runner, review_agent.mode (auto|manual),
+    review_agent.auto_merge, and review_agent.delete_branch`)
 }
 
 func findFreeAddr() (string, error) {
@@ -660,5 +662,11 @@ func printConfigUsage() {
   kanban config set-repo-key --repo-key NAME [--repos-file PATH] [--path DIR] [--repo owner/repo]
   kanban config set-runner --runner NAME [--mode implement|plan|review|audit] [--path DIR] [--repo owner/repo]
   kanban config runners
-  kanban config show`)
+  kanban config show
+
+Review agent config keys:
+  review_agent.runner: runner name, defaults to codex
+  review_agent.mode: auto or manual
+  review_agent.auto_merge: merge after approval when true
+  review_agent.delete_branch: delete merged branch when true`)
 }

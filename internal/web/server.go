@@ -25,12 +25,14 @@ var templateFS embed.FS
 
 type Loader func(context.Context) (github.Board, error)
 type Mover func(context.Context, string, int, github.Lane) error
+type ReviewDispatcher func(context.Context, state.Config, agent.ReviewRequest) (agent.ReviewResult, error)
 
 type Server struct {
-	loader     Loader
-	mover      Mover
-	tmpl       *template.Template
-	standalone *standaloneTracker
+	loader           Loader
+	mover            Mover
+	reviewDispatcher ReviewDispatcher
+	tmpl             *template.Template
+	standalone       *standaloneTracker
 }
 
 type standaloneTracker struct {
@@ -91,9 +93,10 @@ func NewServer(loader Loader) (*Server, error) {
 	}
 	client := github.NewClient()
 	return &Server{
-		loader: loader,
-		mover:  client.MoveIssue,
-		tmpl:   tmpl,
+		loader:           loader,
+		mover:            client.MoveIssue,
+		reviewDispatcher: agent.NewReviewer().Dispatch,
+		tmpl:             tmpl,
 	}, nil
 }
 
@@ -157,6 +160,7 @@ func (s *Server) newMux() *http.ServeMux {
 	mux.HandleFunc("/api/issues/move", s.handleIssueMove)
 	mux.HandleFunc("/api/dispatch/options", s.handleDispatchOptions)
 	mux.HandleFunc("/api/dispatch", s.handleDispatch)
+	mux.HandleFunc("/api/review/dispatch", s.handleReviewDispatch)
 	mux.HandleFunc("/api/agent/jobs", s.handleAgentJobs)
 	mux.HandleFunc("/api/standalone/heartbeat", s.handleStandaloneHeartbeat)
 	mux.HandleFunc("/api/standalone/close", s.handleStandaloneClose)
@@ -208,9 +212,19 @@ func (s *Server) handleIssueMove(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	reviewDispatched := false
+	if lane == github.LaneReview {
+		result, err := s.dispatchReview(r.Context(), board.Repo.Slug, request.Issue, true)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		reviewDispatched = result.Dispatch.Issue > 0
+	}
 	writeJSON(w, map[string]any{
-		"issue": request.Issue,
-		"lane":  lane,
+		"issue":             request.Issue,
+		"lane":              lane,
+		"review_dispatched": reviewDispatched,
 	})
 }
 
@@ -315,6 +329,100 @@ func (s *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+func (s *Server) handleReviewDispatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		Issue     int    `json:"issue"`
+		Runner    string `json:"runner"`
+		AutoMerge *bool  `json:"auto_merge"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	board, err := s.loader(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	result, err := s.dispatchReviewWithRunner(r.Context(), board.Repo.Slug, request.Issue, request.Runner, request.AutoMerge, false)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) dispatchReview(ctx context.Context, repo string, issue int, async bool) (agent.ReviewResult, error) {
+	return s.dispatchReviewWithRunner(ctx, repo, issue, "", nil, async)
+}
+
+func (s *Server) dispatchReviewWithRunner(ctx context.Context, repo string, issue int, runner string, autoMerge *bool, async bool) (agent.ReviewResult, error) {
+	config, err := state.LoadConfig()
+	if err != nil {
+		return agent.ReviewResult{}, err
+	}
+	if autoMerge != nil {
+		config.ReviewAgent.AutoMerge = autoMerge
+		if *autoMerge {
+			config.ReviewAgent.Mode = "auto"
+		}
+	}
+	dispatcher := s.reviewDispatcher
+	if dispatcher == nil {
+		dispatcher = agent.NewReviewer().Dispatch
+	}
+	if config.ReviewMode() == "manual" {
+		return dispatcher(ctx, config, agent.ReviewRequest{Repo: repo, Issue: issue, Runner: runner})
+	}
+	if !async {
+		runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		return dispatcher(runCtx, config, agent.ReviewRequest{Repo: repo, Issue: issue, Runner: runner})
+	}
+
+	result, err := agent.RecordReviewDispatch(config, agent.ReviewRequest{Repo: repo, Issue: issue, Runner: runner}, time.Now().UTC())
+	if err != nil {
+		return agent.ReviewResult{}, err
+	}
+	go func() {
+		runCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		runner := agent.NewReviewer()
+		status := state.StatusCompleted
+		if err := runner.ExecCommand(runCtx, result.Command); err != nil {
+			status = state.StatusFailed
+			log.Printf("review dispatch for %s#%d failed: %v", repo, issue, err)
+		}
+		if err := markReviewResult(result.Dispatch, status); err != nil {
+			log.Printf("review dispatch status update for %s#%d failed: %v", repo, issue, err)
+		}
+	}()
+	return result, nil
+}
+
+func markReviewResult(target state.Dispatch, status string) error {
+	dispatches, err := state.LoadDispatches()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for i := range dispatches {
+		dispatch := dispatches[i]
+		if dispatch.Repo == target.Repo && dispatch.Issue == target.Issue && dispatch.TypeName() == target.TypeName() && dispatch.DispatchedAt.Equal(target.DispatchedAt) {
+			dispatches[i].Status = status
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return state.SaveDispatches(dispatches)
+}
+
 func (s *Server) handleAgentJobs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -349,11 +457,18 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	config, err := state.LoadConfig()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	view := struct {
 		github.Board
 		StandaloneSession string
+		ReviewAutoMerge   bool
 	}{
-		Board: board,
+		Board:           board,
+		ReviewAutoMerge: config.ReviewAutoMerge(),
 	}
 	if s.standalone != nil {
 		view.StandaloneSession = s.standalone.session

@@ -20,9 +20,10 @@ const (
 )
 
 type Config struct {
-	Repos   map[string]RepoConfig   `json:"repos,omitempty"`
-	Runners map[string]RunnerConfig `json:"runners,omitempty"`
-	Agent   AgentConfig             `json:"agent,omitempty"`
+	Repos       map[string]RepoConfig   `json:"repos,omitempty"`
+	Runners     map[string]RunnerConfig `json:"runners,omitempty"`
+	Agent       AgentConfig             `json:"agent,omitempty"`
+	ReviewAgent ReviewAgentConfig       `json:"review_agent,omitempty"`
 }
 
 type RepoConfig struct {
@@ -35,6 +36,13 @@ type RepoConfig struct {
 type AgentConfig struct {
 	AutoMoveOnDispatch *bool `json:"auto_move_on_dispatch,omitempty"`
 	AutoMoveOnComplete *bool `json:"auto_move_on_complete,omitempty"`
+}
+
+type ReviewAgentConfig struct {
+	Runner       string `json:"runner,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	AutoMerge    *bool  `json:"auto_merge,omitempty"`
+	DeleteBranch *bool  `json:"delete_branch,omitempty"`
 }
 
 type RunnerConfig struct {
@@ -96,11 +104,17 @@ func LoadConfig() (Config, error) {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 	applyDefaults(&config)
+	if err := validateConfig(config); err != nil {
+		return Config{}, err
+	}
 	return config, nil
 }
 
 func SaveConfig(config Config) error {
 	applyDefaults(&config)
+	if err := validateConfig(config); err != nil {
+		return err
+	}
 	path, err := ConfigPath()
 	if err != nil {
 		return err
@@ -157,9 +171,39 @@ func (c Config) AutoMoveOnDispatch() bool {
 	return *c.Agent.AutoMoveOnDispatch
 }
 
+func (c Config) ReviewRunner() string {
+	if runner := strings.TrimSpace(c.ReviewAgent.Runner); runner != "" {
+		return runner
+	}
+	return DefaultRunner
+}
+
+func (c Config) ReviewMode() string {
+	if mode := strings.TrimSpace(c.ReviewAgent.Mode); mode != "" {
+		return mode
+	}
+	return "auto"
+}
+
+func (c Config) ReviewAutoMerge() bool {
+	if c.ReviewAgent.AutoMerge == nil {
+		return true
+	}
+	return *c.ReviewAgent.AutoMerge
+}
+
+func (c Config) ReviewDeleteBranch() bool {
+	if c.ReviewAgent.DeleteBranch == nil {
+		return true
+	}
+	return *c.ReviewAgent.DeleteBranch
+}
+
 func DefaultConfig() Config {
 	autoMove := true
 	autoComplete := false
+	autoMerge := true
+	deleteBranch := true
 	config := Config{
 		Repos: map[string]RepoConfig{},
 		Runners: map[string]RunnerConfig{
@@ -195,6 +239,12 @@ func DefaultConfig() Config {
 			AutoMoveOnDispatch: &autoMove,
 			AutoMoveOnComplete: &autoComplete,
 		},
+		ReviewAgent: ReviewAgentConfig{
+			Runner:       DefaultRunner,
+			Mode:         "auto",
+			AutoMerge:    &autoMerge,
+			DeleteBranch: &deleteBranch,
+		},
 	}
 	return config
 }
@@ -213,5 +263,28 @@ func applyDefaults(config *Config) {
 	if config.Agent.AutoMoveOnComplete == nil {
 		v := false
 		config.Agent.AutoMoveOnComplete = &v
+	}
+	if strings.TrimSpace(config.ReviewAgent.Runner) == "" {
+		config.ReviewAgent.Runner = DefaultRunner
+	}
+	if strings.TrimSpace(config.ReviewAgent.Mode) == "" {
+		config.ReviewAgent.Mode = "auto"
+	}
+	if config.ReviewAgent.AutoMerge == nil {
+		v := true
+		config.ReviewAgent.AutoMerge = &v
+	}
+	if config.ReviewAgent.DeleteBranch == nil {
+		v := true
+		config.ReviewAgent.DeleteBranch = &v
+	}
+}
+
+func validateConfig(config Config) error {
+	switch config.ReviewMode() {
+	case "auto", "manual":
+		return nil
+	default:
+		return fmt.Errorf("review_agent.mode must be auto or manual, got %q", config.ReviewMode())
 	}
 }

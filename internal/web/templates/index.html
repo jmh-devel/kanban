@@ -185,6 +185,23 @@
       opacity: 0.55;
     }
 
+    .card.moving {
+      cursor: progress;
+      opacity: 0.78;
+    }
+
+    .moving-badge {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: white;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+
     .card-actions {
       margin-top: 12px;
       display: flex;
@@ -507,6 +524,25 @@
       background: #8a1f2d;
     }
 
+    .sync-banner {
+      position: fixed;
+      top: 14px;
+      right: 18px;
+      padding: 8px 11px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--ink);
+      font-size: 0.82rem;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+      display: none;
+      z-index: 19;
+    }
+
+    .sync-banner.open {
+      display: block;
+    }
+
     @media (max-width: 700px) {
       header {
         padding: 20px 16px 8px;
@@ -639,6 +675,7 @@
       </div>
     </section>
   </main>
+  <div class="sync-banner" id="syncBanner" role="status" aria-live="polite">Syncing...</div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="modal-backdrop" id="detailBackdrop">
     <section class="modal" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
@@ -660,6 +697,7 @@
       <div class="modal-actions">
         <a class="button secondary" id="detailGitHub" href="#">GitHub</a>
         <button class="secondary" type="button" id="detailDispatch">Dispatch</button>
+        <button class="secondary" type="button" id="detailMergeDone">Merge & Done</button>
         <button class="secondary" type="button" id="detailClose">Close</button>
         <button type="button" id="detailMove">Move</button>
       </div>
@@ -701,6 +739,7 @@
     const flowLines = document.getElementById("flowLines");
     const columns = Array.from(document.querySelectorAll(".column[data-lane]"));
     const toast = document.getElementById("toast");
+    const syncBanner = document.getElementById("syncBanner");
     const standaloneSession = "{{ .StandaloneSession }}";
     const standalonePayload = JSON.stringify({ session: standaloneSession });
     const backdrop = document.getElementById("dispatchBackdrop");
@@ -721,6 +760,8 @@
     const detailBody = document.getElementById("detailBody");
     const detailGitHub = document.getElementById("detailGitHub");
     const detailMessage = document.getElementById("detailMessage");
+    const detailMergeDone = document.getElementById("detailMergeDone");
+    const reviewAutoMerge = {{ if .ReviewAutoMerge }}true{{ else }}false{{ end }};
     const jobsPanel = document.getElementById("jobsPanel");
     const jobsBody = document.getElementById("jobsBody");
     const jobsAllRepos = document.getElementById("jobsAllRepos");
@@ -732,6 +773,9 @@
     let jobsTimer = 0;
     let currentJobs = [];
     let programmaticReload = false;
+    let moveQueue = [];
+    let moveRunnerActive = false;
+    let moveSequence = 0;
     const pendingDispatchKey = "kanban.pendingDispatchIssue";
     const autoRefreshInterval = 30000;
     const laneValues = {
@@ -1015,6 +1059,7 @@
       detailBody.textContent = issue.body || "No issue body.";
       detailLane.value = laneValues[card.dataset.lane || issue.lane] || "backlog";
       detailGitHub.href = issue.url || "#";
+      detailMergeDone.hidden = reviewAutoMerge || detailLane.value !== "review";
       detailMessage.textContent = "";
       detailBackdrop.classList.add("open");
     }
@@ -1064,7 +1109,7 @@
     function startAutoRefresh() {
       if (!hasActiveDispatch()) return;
       window.setInterval(() => {
-        if (backdrop.classList.contains("open") || detailBackdrop.classList.contains("open") || draggedCard) return;
+        if (backdrop.classList.contains("open") || detailBackdrop.classList.contains("open") || draggedCard || moveRunnerActive || moveQueue.length) return;
         reloadBoard();
       }, autoRefreshInterval);
     }
@@ -1121,11 +1166,11 @@
           column.classList.remove("drag-over");
         }
       });
-      column.addEventListener("drop", async (event) => {
+      column.addEventListener("drop", (event) => {
         event.preventDefault();
         column.classList.remove("drag-over");
         if (!draggedCard) return;
-        await moveCard(draggedCard, laneValues[column.dataset.lane], column);
+        moveCard(draggedCard, laneValues[column.dataset.lane], column);
       });
     });
 
@@ -1158,11 +1203,30 @@
       openDispatch();
     });
 
+    detailMergeDone.addEventListener("click", async () => {
+      if (!detailIssue) return;
+      detailMessage.textContent = "Reviewing and merging...";
+      const response = await fetch("/api/review/dispatch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issue: Number(detailIssue.number), auto_merge: true })
+      });
+      if (response.ok) {
+        detailMessage.textContent = "Review merge dispatched.";
+        showToast("Review merge dispatched.");
+        reloadBoard(350);
+        return;
+      }
+      const error = (await response.text()).trim() || "Review merge failed.";
+      detailMessage.textContent = error;
+      showToast(error, true);
+    });
+
     document.getElementById("detailMove").addEventListener("click", async () => {
       if (!selected || !detailIssue) return;
       detailMessage.textContent = "";
       const targetColumn = columns.find((column) => laneValues[column.dataset.lane] === detailLane.value);
-      await moveCard(selected, detailLane.value, targetColumn, detailMessage);
+      moveCard(selected, detailLane.value, targetColumn, detailMessage);
     });
 
     document.getElementById("refreshBoard").addEventListener("click", () => {
@@ -1215,11 +1279,17 @@
       message.textContent = (await response.text()).trim();
     });
 
-    async function moveCard(card, lane, targetColumn, statusNode = null) {
+    function moveCard(card, lane, targetColumn, statusNode = null) {
       if (statusNode) statusNode.textContent = "";
       if (!lane || !targetColumn) return;
       if (laneValues[card.dataset.lane] === lane) {
         const text = `Already in ${targetColumn.dataset.lane}.`;
+        if (statusNode) statusNode.textContent = text;
+        showToast(text);
+        return;
+      }
+      if (card.classList.contains("moving")) {
+        const text = `#${card.dataset.issue} is already moving.`;
         if (statusNode) statusNode.textContent = text;
         showToast(text);
         return;
@@ -1231,24 +1301,57 @@
       targetCards.appendChild(card);
       const oldLane = card.dataset.lane;
       card.dataset.lane = targetColumn.dataset.lane;
+      setCardMoving(card, true);
       if (statusNode) statusNode.textContent = "Moving...";
       renderFlowLines();
 
+      moveQueue.push({
+        id: ++moveSequence,
+        card,
+        issue,
+        lane,
+        targetColumn,
+        sourceParent,
+        sourceNext,
+        oldLane,
+        statusNode
+      });
+      updateSyncBanner();
+      runMoveQueue();
+    }
+
+    async function runMoveQueue() {
+      if (moveRunnerActive) return;
+      moveRunnerActive = true;
+      updateSyncBanner();
+      while (moveQueue.length) {
+        const task = moveQueue.shift();
+        await processMoveTask(task);
+        updateSyncBanner();
+      }
+      moveRunnerActive = false;
+      updateSyncBanner();
+      reloadBoard(350);
+    }
+
+    async function processMoveTask(task) {
+      const { card, issue, lane, targetColumn, sourceParent, sourceNext, oldLane, statusNode } = task;
       const response = await fetch("/api/issues/move", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ issue, lane })
       });
       if (response.ok) {
+        setCardMoving(card, false);
+        const result = await response.json();
         const text = `Moved #${issue} to ${targetColumn.dataset.lane}.`;
         if (statusNode) statusNode.textContent = text;
-        showToast(text);
+        showToast(result.review_dispatched ? `${text} Review agent dispatched.` : text);
         if (lane === "in-progress") {
           try {
             sessionStorage.setItem(pendingDispatchKey, String(issue));
           } catch (error) {}
         }
-        reloadBoard(350);
         return;
       }
 
@@ -1258,10 +1361,32 @@
         sourceParent.appendChild(card);
       }
       card.dataset.lane = oldLane;
+      setCardMoving(card, false);
       const error = (await response.text()).trim() || "Move failed.";
       if (statusNode) statusNode.textContent = error;
       showToast(error, true);
       renderFlowLines();
+    }
+
+    function setCardMoving(card, moving) {
+      card.classList.toggle("moving", moving);
+      let badge = card.querySelector(".moving-badge");
+      if (moving) {
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "moving-badge";
+          badge.textContent = "moving...";
+          card.appendChild(badge);
+        }
+        return;
+      }
+      if (badge) badge.remove();
+    }
+
+    function updateSyncBanner() {
+      const total = moveQueue.length + (moveRunnerActive ? 1 : 0);
+      syncBanner.textContent = total > 1 ? `Syncing ${total} moves...` : "Syncing...";
+      syncBanner.classList.toggle("open", total > 0);
     }
 
     function relationshipLinks() {

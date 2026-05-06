@@ -11,6 +11,9 @@ import (
 )
 
 const (
+	TypeDispatch = "dispatch"
+	TypeReview   = "review"
+
 	StatusDispatched = "dispatched"
 	StatusCompleted  = "completed"
 	StatusFailed     = "failed"
@@ -21,6 +24,7 @@ const (
 type Dispatch struct {
 	Repo         string    `json:"repo"`
 	Issue        int       `json:"issue"`
+	Type         string    `json:"type,omitempty"`
 	Runner       string    `json:"runner"`
 	Mode         string    `json:"mode"`
 	DispatchedAt time.Time `json:"dispatched_at"`
@@ -77,6 +81,16 @@ func ActiveDispatch(dispatches []Dispatch, repo string, issue int) (Dispatch, bo
 	return Dispatch{}, false
 }
 
+func ActiveDispatchByType(dispatches []Dispatch, repo string, issue int, dispatchType string) (Dispatch, bool) {
+	for i := len(dispatches) - 1; i >= 0; i-- {
+		dispatch := dispatches[i]
+		if dispatch.Repo == repo && dispatch.Issue == issue && dispatch.TypeName() == dispatchType && IsActiveStatus(dispatch.Status) {
+			return dispatch, true
+		}
+	}
+	return Dispatch{}, false
+}
+
 func ActiveDispatchesByIssue(dispatches []Dispatch, repo string) map[int]Dispatch {
 	active := make(map[int]Dispatch)
 	for _, dispatch := range dispatches {
@@ -91,12 +105,19 @@ func ActiveDispatchesByIssue(dispatches []Dispatch, repo string) map[int]Dispatc
 func AppendDispatch(dispatches []Dispatch, dispatch Dispatch, supersedeExisting bool) []Dispatch {
 	if supersedeExisting {
 		for i := range dispatches {
-			if dispatches[i].Repo == dispatch.Repo && dispatches[i].Issue == dispatch.Issue && IsActiveStatus(dispatches[i].Status) {
+			if dispatches[i].Repo == dispatch.Repo && dispatches[i].Issue == dispatch.Issue && dispatches[i].TypeName() == dispatch.TypeName() && IsActiveStatus(dispatches[i].Status) {
 				dispatches[i].Status = StatusSuperseded
 			}
 		}
 	}
 	return append(dispatches, dispatch)
+}
+
+func (d Dispatch) TypeName() string {
+	if strings.TrimSpace(d.Type) == "" {
+		return TypeDispatch
+	}
+	return strings.TrimSpace(d.Type)
 }
 
 func MarkActiveDispatches(repo string, issue int, status string) (bool, error) {

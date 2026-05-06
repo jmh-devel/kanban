@@ -408,7 +408,7 @@
       <span>Updated: {{ .UpdatedAt.Format "2006-01-02 15:04:05 UTC" }}</span>
     </div>
     <div class="actions">
-      <a class="button" href="/">Refresh</a>
+      <button type="button" id="refreshBoard">Refresh</button>
       <a class="button secondary" href="/api/board">JSON</a>
       {{ if .Repo.WebURL }}<a class="button secondary" href="{{ .Repo.WebURL }}">Origin</a>{{ end }}
     </div>
@@ -577,6 +577,7 @@
     let toastTimer = 0;
     let programmaticReload = false;
     const pendingDispatchKey = "kanban.pendingDispatchIssue";
+    const autoRefreshInterval = 30000;
     const laneValues = {
       "Backlog": "backlog",
       "In Progress": "in-progress",
@@ -731,13 +732,33 @@
         issue = sessionStorage.getItem(pendingDispatchKey) || "";
         sessionStorage.removeItem(pendingDispatchKey);
       } catch (error) {
+        showToast("Could not open dispatch - browser storage is unavailable.", true);
         return;
       }
       if (!issue) return;
       const card = cards.find((candidate) => candidate.dataset.issue === issue);
-      if (!card || laneValues[card.dataset.lane] !== "in-progress") return;
+      if (!card) {
+        showToast("Could not open dispatch - card not found after reload.", true);
+        return;
+      }
+      if (laneValues[card.dataset.lane] !== "in-progress") {
+        showToast("Could not open dispatch - card is no longer in In Progress.", true);
+        return;
+      }
       selectCard(card);
       openDispatch();
+    }
+
+    function hasActiveDispatch() {
+      return issues.some((issue) => issue.agent && issue.agent.status === "dispatched");
+    }
+
+    function startAutoRefresh() {
+      if (!hasActiveDispatch()) return;
+      window.setInterval(() => {
+        if (backdrop.classList.contains("open") || detailBackdrop.classList.contains("open") || draggedCard) return;
+        reloadBoard();
+      }, autoRefreshInterval);
     }
 
     async function refreshPreview() {
@@ -803,6 +824,7 @@
 
     selectCard(selected);
     startStandaloneSessionHeartbeat();
+    startAutoRefresh();
     renderFlowLines();
     openPendingDispatch();
 
@@ -828,8 +850,13 @@
 
     document.getElementById("detailMove").addEventListener("click", async () => {
       if (!selected || !detailIssue) return;
+      detailMessage.textContent = "";
       const targetColumn = columns.find((column) => laneValues[column.dataset.lane] === detailLane.value);
       await moveCard(selected, detailLane.value, targetColumn, detailMessage);
+    });
+
+    document.getElementById("refreshBoard").addEventListener("click", () => {
+      reloadBoard();
     });
 
     document.getElementById("cancelDispatch").addEventListener("click", () => {
@@ -876,7 +903,14 @@
     });
 
     async function moveCard(card, lane, targetColumn, statusNode = null) {
-      if (!lane || !targetColumn || laneValues[card.dataset.lane] === lane) return;
+      if (statusNode) statusNode.textContent = "";
+      if (!lane || !targetColumn) return;
+      if (laneValues[card.dataset.lane] === lane) {
+        const text = `Already in ${targetColumn.dataset.lane}.`;
+        if (statusNode) statusNode.textContent = text;
+        showToast(text);
+        return;
+      }
       const sourceParent = card.parentElement;
       const sourceNext = card.nextElementSibling;
       const issue = Number(card.dataset.issue);

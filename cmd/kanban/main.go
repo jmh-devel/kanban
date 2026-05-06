@@ -355,7 +355,7 @@ func runOpen(args []string) int {
 	repoPath := fs.String("path", ".", "path inside the target git repository")
 	doneWindowDays := fs.Int("done-window-days", ghclient.DefaultDoneDays, "days of closed issues to show in Done")
 	groupByMilestone := fs.Bool("group-by-milestone", false, "preserve milestone grouping metadata within lanes")
-	idleTimeout := fs.Duration("idle-timeout", 10*time.Second, "how long after browser close/idle to stop standalone server")
+	idleTimeout := fs.Duration("idle-timeout", 30*time.Second, "how long after browser close/idle to stop standalone server")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

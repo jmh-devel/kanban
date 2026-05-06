@@ -645,6 +645,13 @@
     function reloadBoard(delay = 0) {
       window.setTimeout(() => {
         programmaticReload = true;
+        // Send a final heartbeat so the server's idle timer resets during the
+        // reload — on large repos (many issues) the GitHub API fetch can take
+        // several seconds, which previously caused the 10 s idle timeout to
+        // fire and shut down the standalone server.
+        if (standaloneSession && navigator.sendBeacon) {
+          navigator.sendBeacon("/api/standalone/heartbeat", JSON.stringify({ session: standaloneSession }));
+        }
         window.location.reload();
       }, delay);
     }

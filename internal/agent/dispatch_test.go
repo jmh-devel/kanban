@@ -284,3 +284,79 @@ func TestMoveIssueToInProgressCreatesInProgressLabelAfterReviewFallback(t *testi
 		t.Fatalf("calls = %v, want %v", calls, want)
 	}
 }
+
+func TestReviewManualRecordsReviewDispatch(t *testing.T) {
+	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
+	autoMerge := true
+	deleteBranch := true
+	config := state.Config{
+		Runners: map[string]state.RunnerConfig{
+			state.DefaultRunner: {Kind: "local_cli", Command: state.DefaultRunner},
+		},
+		ReviewAgent: state.ReviewAgentConfig{
+			Runner:       state.DefaultRunner,
+			Mode:         "manual",
+			AutoMerge:    &autoMerge,
+			DeleteBranch: &deleteBranch,
+		},
+	}
+	reviewer := Reviewer{
+		ExecCommand: func(context.Context, string) error {
+			t.Fatal("manual review should not execute")
+			return nil
+		},
+		Now: func() time.Time {
+			return time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	result, err := reviewer.Dispatch(context.Background(), config, ReviewRequest{
+		Repo:  "jmh-devel/example",
+		Issue: 32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Manual || result.Dispatch.Type != state.TypeReview || result.Dispatch.Mode != "manual" {
+		t.Fatalf("result = %+v", result)
+	}
+	dispatches, err := state.LoadDispatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatches) != 1 || dispatches[0].Type != state.TypeReview || dispatches[0].Status != state.StatusDispatched {
+		t.Fatalf("dispatches = %+v", dispatches)
+	}
+}
+
+func TestBuildReviewCommandIncludesMergeAndDeleteBranch(t *testing.T) {
+	autoMerge := true
+	deleteBranch := true
+	config := state.Config{
+		Runners: map[string]state.RunnerConfig{
+			"codex": {Kind: "local_cli", Command: "codex"},
+		},
+		ReviewAgent: state.ReviewAgentConfig{
+			Runner:       "codex",
+			Mode:         "auto",
+			AutoMerge:    &autoMerge,
+			DeleteBranch: &deleteBranch,
+		},
+	}
+
+	command, err := BuildReviewCommand(config, "jmh-devel/example", 32, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"gh pr list",
+		"codex --repo jmh-devel/example --issue 32 --mode review",
+		"gh pr review \"$pr\" --repo jmh-devel/example --approve",
+		"gh pr merge $pr --repo jmh-devel/example --squash --delete-branch",
+		"gh issue close 32 --repo jmh-devel/example",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("command = %q, missing %q", command, want)
+		}
+	}
+}

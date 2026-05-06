@@ -70,6 +70,11 @@ func TestHandleIssueMoveRejectsUnknownLane(t *testing.T) {
 
 func TestHandleIssueMoveClearsActiveDispatchOutsideInProgress(t *testing.T) {
 	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
+	config := state.DefaultConfig()
+	config.ReviewAgent.Mode = "manual"
+	if err := state.SaveConfig(config); err != nil {
+		t.Fatal(err)
+	}
 	if err := state.SaveDispatches([]state.Dispatch{{
 		Repo:   "jmh-devel/example",
 		Issue:  42,
@@ -100,12 +105,55 @@ func TestHandleIssueMoveClearsActiveDispatchOutsideInProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dispatches) != 1 || dispatches[0].Status != state.StatusCompleted {
+	if len(dispatches) != 2 || dispatches[0].Status != state.StatusCompleted || dispatches[1].Type != state.TypeReview {
+		t.Fatalf("dispatches = %+v", dispatches)
+	}
+}
+
+func TestHandleIssueMoveToReviewRecordsReviewDispatch(t *testing.T) {
+	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
+	config := state.DefaultConfig()
+	config.ReviewAgent.Mode = "manual"
+	if err := state.SaveConfig(config); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(func(context.Context) (github.Board, error) {
+		return github.Board{Repo: repo.Details{Slug: "jmh-devel/example"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mover = func(context.Context, string, int, github.Lane) error {
+		return nil
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "http://example.com/api/issues/move", strings.NewReader(`{"issue":42,"lane":"review"}`))
+	recorder := httptest.NewRecorder()
+	server.newMux().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		ReviewDispatched bool `json:"review_dispatched"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.ReviewDispatched {
+		t.Fatalf("response = %+v", response)
+	}
+	dispatches, err := state.LoadDispatches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dispatches) != 1 || dispatches[0].Type != state.TypeReview || dispatches[0].Mode != "manual" {
 		t.Fatalf("dispatches = %+v", dispatches)
 	}
 }
 
 func TestIndexRendersIssueDataForDetails(t *testing.T) {
+	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
 	server, err := NewServer(func(context.Context) (github.Board, error) {
 		return github.Board{
 			Repo:      repo.Details{Slug: "jmh-devel/example"},
@@ -133,7 +181,7 @@ func TestIndexRendersIssueDataForDetails(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %q", recorder.Code, body)
 	}
-	for _, want := range []string{"const boardData =", "detailBackdrop", "refreshBoard", "Already in", "card not found after reload", "data-issue=\"12\"", "depends on #13"} {
+	for _, want := range []string{"const boardData =", "detailBackdrop", "refreshBoard", "detailMergeDone", "Already in", "card not found after reload", "data-issue=\"12\"", "depends on #13"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("response missing %q:\n%s", want, body)
 		}

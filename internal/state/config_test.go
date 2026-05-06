@@ -38,3 +38,28 @@ func TestRunnerUsesBuiltInDefaultWhenMissing(t *testing.T) {
 		t.Fatalf("Runner(ManualRunner) = %+v", manual)
 	}
 }
+
+func TestReviewAgentDefaults(t *testing.T) {
+	config := Config{}
+	applyDefaults(&config)
+
+	if config.ReviewRunner() != DefaultRunner {
+		t.Fatalf("ReviewRunner() = %q", config.ReviewRunner())
+	}
+	if config.ReviewMode() != "auto" {
+		t.Fatalf("ReviewMode() = %q", config.ReviewMode())
+	}
+	if !config.ReviewAutoMerge() || !config.ReviewDeleteBranch() {
+		t.Fatalf("review merge defaults = auto_merge:%v delete_branch:%v", config.ReviewAutoMerge(), config.ReviewDeleteBranch())
+	}
+}
+
+func TestReviewAgentModeValidation(t *testing.T) {
+	t.Setenv("KANBAN_CONFIG_DIR", t.TempDir())
+	config := DefaultConfig()
+	config.ReviewAgent.Mode = "sometimes"
+
+	if err := SaveConfig(config); err == nil {
+		t.Fatal("expected invalid review mode error")
+	}
+}

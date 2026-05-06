@@ -329,6 +329,8 @@ func runServe(args []string) int {
 		return 2
 	}
 
+	ensureLabels(context.Background(), *repoPath, *repoSlug)
+
 	server, err := web.NewServer(func(ctx context.Context) (ghclient.Board, error) {
 		return loadBoard(ctx, *repoPath, *repoSlug, ghclient.BoardOptions{
 			DoneWindowDays:   *doneWindowDays,
@@ -357,6 +359,8 @@ func runOpen(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+
+	ensureLabels(context.Background(), *repoPath, *repoSlug)
 
 	addr, err := findFreeAddr()
 	if err != nil {
@@ -532,6 +536,24 @@ func loadBoard(ctx context.Context, startPath string, repoSlug string, options g
 	}
 	client := ghclient.NewClient()
 	return client.LoadBoardWithOptions(ctx, details, options)
+}
+
+// ensureLabels runs a pre-flight check before the web server starts: it
+// detects the current repo slug and creates any missing kanban lane labels.
+// Failures are non-fatal — a warning is printed and the server still starts.
+func ensureLabels(ctx context.Context, startPath, repoSlug string) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	details, err := repo.Detect(ctx, startPath, repoSlug)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kanban: label pre-flight: could not detect repo: %v\n", err)
+		return
+	}
+	fmt.Printf("kanban: checking lane labels for %s...\n", details.Slug)
+	if err := initcmd.EnsureLaneLabels(ctx, details.Slug, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "kanban: label pre-flight warning: %v\n", err)
+	}
 }
 
 func printUsage() {

@@ -103,7 +103,7 @@ func TestManualDispatchDoesNotExecuteOrMove(t *testing.T) {
 	result, err := dispatcher.Dispatch(context.Background(), config, Request{
 		Repo:   "jmh-devel/example",
 		Issue:  12,
-		Runner: state.DefaultRunner,
+		Runner: state.ManualRunner,
 		Mode:   "implement",
 	})
 	if err != nil {

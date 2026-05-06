@@ -25,13 +25,23 @@ import (
 	"github.com/jmh-devel/kanban/internal/web"
 )
 
-var version = "dev"
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildDate = ""
+	dirty     = ""
+)
 
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(args []string) int {
+	if len(args) > 0 && isVersionFlag(args[0]) {
+		printVersion()
+		return 0
+	}
+
 	command := "print"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command = args[0]
@@ -57,8 +67,8 @@ func run(args []string) int {
 		return runMove(args)
 	case "config":
 		return runConfig(args)
-	case "version", "--version", "-v":
-		fmt.Println(version)
+	case "version":
+		printVersion()
 		return 0
 	case "help", "--help", "-h":
 		printUsage()
@@ -68,6 +78,32 @@ func run(args []string) int {
 		printUsage()
 		return 2
 	}
+}
+
+func isVersionFlag(arg string) bool {
+	return arg == "--version" || arg == "-v"
+}
+
+func printVersion() {
+	fmt.Print(versionInfo())
+}
+
+func versionInfo() string {
+	built := buildDate
+	if built == "" {
+		built = "unknown"
+	}
+
+	var builder strings.Builder
+	_, _ = fmt.Fprintf(&builder, "kanban %s\n", version)
+	_, _ = fmt.Fprintf(&builder, "commit: %s\n", commit)
+	_, _ = fmt.Fprintf(&builder, "built: %s\n", built)
+	_, _ = fmt.Fprintf(&builder, "go: %s\n", runtime.Version())
+	_, _ = fmt.Fprintf(&builder, "platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	if dirty != "" {
+		_, _ = fmt.Fprintf(&builder, "dirty: %s\n", dirty)
+	}
+	return builder.String()
 }
 
 func runConfig(args []string) int {

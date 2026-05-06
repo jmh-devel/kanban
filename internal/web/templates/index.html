@@ -575,6 +575,8 @@
     let confirmDuplicate = false;
     let draggedCard = null;
     let toastTimer = 0;
+    let programmaticReload = false;
+    const pendingDispatchKey = "kanban.pendingDispatchIssue";
     const laneValues = {
       "Backlog": "backlog",
       "In Progress": "in-progress",
@@ -618,6 +620,7 @@
       const timer = setInterval(sendHeartbeat, 2000);
       window.addEventListener("beforeunload", () => {
         clearInterval(timer);
+        if (programmaticReload) return;
         if (navigator.sendBeacon) {
           navigator.sendBeacon("/api/standalone/close", payload);
           return;
@@ -636,6 +639,13 @@
       if (selected) selected.classList.remove("selected");
       selected = card;
       selected.classList.add("selected");
+    }
+
+    function reloadBoard(delay = 0) {
+      window.setTimeout(() => {
+        programmaticReload = true;
+        window.location.reload();
+      }, delay);
     }
 
     function setOptions(select, values, current) {
@@ -715,6 +725,21 @@
       backdrop.classList.add("open");
     }
 
+    function openPendingDispatch() {
+      let issue = "";
+      try {
+        issue = sessionStorage.getItem(pendingDispatchKey) || "";
+        sessionStorage.removeItem(pendingDispatchKey);
+      } catch (error) {
+        return;
+      }
+      if (!issue) return;
+      const card = cards.find((candidate) => candidate.dataset.issue === issue);
+      if (!card || laneValues[card.dataset.lane] !== "in-progress") return;
+      selectCard(card);
+      openDispatch();
+    }
+
     async function refreshPreview() {
       if (!selected) return;
       const issue = selected.dataset.issue;
@@ -779,6 +804,7 @@
     selectCard(selected);
     startStandaloneSessionHeartbeat();
     renderFlowLines();
+    openPendingDispatch();
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "d" && !backdrop.classList.contains("open")) {
@@ -843,7 +869,7 @@
           return;
         }
         message.textContent = result.manual ? "Manual command recorded. Copy and run it where needed." : "Dispatched.";
-        window.location.reload();
+        reloadBoard();
         return;
       }
       message.textContent = (await response.text()).trim();
@@ -870,7 +896,12 @@
         const text = `Moved #${issue} to ${targetColumn.dataset.lane}.`;
         if (statusNode) statusNode.textContent = text;
         showToast(text);
-        window.setTimeout(() => window.location.reload(), 350);
+        if (lane === "in-progress") {
+          try {
+            sessionStorage.setItem(pendingDispatchKey, String(issue));
+          } catch (error) {}
+        }
+        reloadBoard(350);
         return;
       }
 

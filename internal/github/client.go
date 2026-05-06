@@ -1,18 +1,18 @@
 package github
 
 import (
-"bytes"
-"context"
-"encoding/json"
-"errors"
-"fmt"
-"os/exec"
-"sort"
-"strings"
-"time"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os/exec"
+	"sort"
+	"strings"
+	"time"
 
-"github.com/jmh-devel/kanban/internal/repo"
-"github.com/jmh-devel/kanban/internal/state"
+	"github.com/jmh-devel/kanban/internal/repo"
+	"github.com/jmh-devel/kanban/internal/state"
 )
 
 type Label struct {
@@ -76,14 +76,14 @@ type Board struct {
 type Lane string
 
 const (
-LaneBacklog    Lane = "backlog"
-LaneInProgress Lane = "in-progress"
-LaneReview     Lane = "review"
-LaneDone       Lane = "done"
+	LaneBacklog    Lane = "backlog"
+	LaneInProgress Lane = "in-progress"
+	LaneReview     Lane = "review"
+	LaneDone       Lane = "done"
 
-InProgressLabel = "kanban:in-progress"
-ReviewLabel     = "kanban:review"
-DefaultDoneDays = 14
+	InProgressLabel = "kanban:in-progress"
+	ReviewLabel     = "kanban:review"
+	DefaultDoneDays = 14
 )
 
 type BoardOptions struct {
@@ -254,7 +254,7 @@ func buildMilestoneGroups(milestones []Milestone, issues []Issue) []Section {
 		sortIssuesDescending(issuesForMilestone)
 		milestoneCopy := milestone
 		groups = append(groups, Section{
-Milestone: &milestoneCopy,
+			Milestone: &milestoneCopy,
 			Title:     milestone.Title,
 			Issues:    issuesForMilestone,
 		})
@@ -281,7 +281,7 @@ Milestone: &milestoneCopy,
 
 func sortIssuesDescending(issues []Issue) {
 	sort.Slice(issues, func(i, j int) bool {
-return issues[i].Number > issues[j].Number
+		return issues[i].Number > issues[j].Number
 	})
 }
 
@@ -322,12 +322,12 @@ func (c *Client) listMilestones(ctx context.Context, slug string) ([]Milestone, 
 
 func (c *Client) listOpenIssues(ctx context.Context, slug string) ([]Issue, error) {
 	out, err := c.run(ctx,
-"issue", "list",
-"--repo", slug,
-"--state", "open",
-"--limit", "500",
-"--json", "number,title,body,url,state,labels,milestone,assignees",
-)
+		"issue", "list",
+		"--repo", slug,
+		"--state", "open",
+		"--limit", "500",
+		"--json", "number,title,body,url,state,labels,milestone,assignees",
+	)
 	if err != nil {
 		return nil, fmt.Errorf("load issues: %w", err)
 	}
@@ -342,13 +342,13 @@ func (c *Client) listDoneIssues(ctx context.Context, slug string, window time.Du
 	since := time.Now().UTC().Add(-window).Format("2006-01-02")
 	search := fmt.Sprintf("repo:%s is:issue is:closed closed:>=%s", slug, since)
 	out, err := c.run(ctx,
-"issue", "list",
-"--repo", slug,
-"--state", "closed",
-"--search", search,
-"--limit", "500",
-"--json", "number,title,body,url,state,closedAt,labels,milestone,assignees",
-)
+		"issue", "list",
+		"--repo", slug,
+		"--state", "closed",
+		"--search", search,
+		"--limit", "500",
+		"--json", "number,title,body,url,state,closedAt,labels,milestone,assignees",
+	)
 	if err != nil {
 		return nil, fmt.Errorf("load done issues: %w", err)
 	}

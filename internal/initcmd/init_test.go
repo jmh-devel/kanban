@@ -112,9 +112,9 @@ func TestRunWithRunnerApply(t *testing.T) {
 
 func TestRunWithRunnerSetupLabels(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]fakeResult{
-		"git -C . rev-parse --show-toplevel":       {output: "/tmp/kanban\n"},
-		"git -C /tmp/kanban remote":                {output: "origin\n"},
-		"git -C /tmp/kanban remote get-url origin": {output: "git@github.com:jmh-devel/kanban.git\n"},
+		"git -C . rev-parse --show-toplevel":                             {output: "/tmp/kanban\n"},
+		"git -C /tmp/kanban remote":                                      {output: "origin\n"},
+		"git -C /tmp/kanban remote get-url origin":                       {output: "git@github.com:jmh-devel/kanban.git\n"},
 		"gh label list --repo jmh-devel/kanban --limit 1000 --json name": {output: `[{"name":"kanban:review"}]`},
 		"gh label create kanban:in-progress --repo jmh-devel/kanban --color 0075ca --description Kanban lane: In Progress": {output: ""},
 	}}
@@ -143,11 +143,11 @@ func TestRunWithRunnerSetupLabels(t *testing.T) {
 
 func TestRunWithRunnerSetupLabelsCreatesBothWhenMissing(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]fakeResult{
-		"git -C . rev-parse --show-toplevel": {output: "/tmp/kanban\n"},
-		"git -C /tmp/kanban remote":          {output: "\n"},
+		"git -C . rev-parse --show-toplevel":                             {output: "/tmp/kanban\n"},
+		"git -C /tmp/kanban remote":                                      {output: "\n"},
 		"gh label list --repo jmh-devel/kanban --limit 1000 --json name": {output: `[]`},
 		"gh label create kanban:in-progress --repo jmh-devel/kanban --color 0075ca --description Kanban lane: In Progress": {output: ""},
-		"gh label create kanban:review --repo jmh-devel/kanban --color e4e669 --description Kanban lane: Review":            {output: ""},
+		"gh label create kanban:review --repo jmh-devel/kanban --color e4e669 --description Kanban lane: Review":           {output: ""},
 	}}
 
 	var output bytes.Buffer

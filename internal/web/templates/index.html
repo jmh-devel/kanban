@@ -588,6 +588,7 @@
     const columns = Array.from(document.querySelectorAll(".column[data-lane]"));
     const toast = document.getElementById("toast");
     const standaloneSession = "{{ .StandaloneSession }}";
+    const standalonePayload = JSON.stringify({ session: standaloneSession });
     const backdrop = document.getElementById("dispatchBackdrop");
     const form = document.getElementById("dispatchForm");
     const title = document.getElementById("dispatchTitle");
@@ -641,31 +642,36 @@
       toastTimer = setTimeout(() => toast.classList.remove("open"), 4200);
     }
 
+    function sendStandaloneHeartbeat(useBeacon = false) {
+      if (!standaloneSession) return;
+      if (useBeacon && navigator.sendBeacon) {
+        navigator.sendBeacon("/api/standalone/heartbeat", standalonePayload);
+        return;
+      }
+      fetch("/api/standalone/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: standalonePayload,
+        keepalive: useBeacon
+      }).catch(() => {});
+    }
+
     function startStandaloneSessionHeartbeat() {
       if (!standaloneSession) return;
 
-      const payload = JSON.stringify({ session: standaloneSession });
-      const sendHeartbeat = () => {
-        fetch("/api/standalone/heartbeat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: payload
-        }).catch(() => {});
-      };
-
-      sendHeartbeat();
-      const timer = setInterval(sendHeartbeat, 2000);
+      sendStandaloneHeartbeat();
+      const timer = setInterval(sendStandaloneHeartbeat, 2000);
       window.addEventListener("beforeunload", () => {
         clearInterval(timer);
         if (programmaticReload) return;
         if (navigator.sendBeacon) {
-          navigator.sendBeacon("/api/standalone/close", payload);
+          navigator.sendBeacon("/api/standalone/close", standalonePayload);
           return;
         }
         fetch("/api/standalone/close", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: payload,
+          body: standalonePayload,
           keepalive: true
         }).catch(() => {});
       });
@@ -681,13 +687,7 @@
     function reloadBoard(delay = 0) {
       window.setTimeout(() => {
         programmaticReload = true;
-        // Send a final heartbeat so the server's idle timer resets during the
-        // reload — on large repos (many issues) the GitHub API fetch can take
-        // several seconds, which previously caused the 10 s idle timeout to
-        // fire and shut down the standalone server.
-        if (standaloneSession && navigator.sendBeacon) {
-          navigator.sendBeacon("/api/standalone/heartbeat", JSON.stringify({ session: standaloneSession }));
-        }
+        sendStandaloneHeartbeat(true);
         window.location.reload();
       }, delay);
     }

@@ -562,7 +562,7 @@ func printUsage() {
 Usage:
 	kanban init [--path DIR] [--owner ORG] [--name REPO] [--remote NAME] [--visibility public|private] [--apply] [--setup-labels]
 	kanban tui [--path DIR] [--repo owner/repo] [--addr HOST:PORT]
-	kanban open [--path DIR] [--repo owner/repo] [--idle-timeout 10s]
+	kanban open [--path DIR] [--repo owner/repo] [--idle-timeout 30s]
   kanban [print] [--path DIR] [--repo owner/repo] [--done-window-days N]
   kanban json [--path DIR] [--repo owner/repo] [--done-window-days N]
   kanban serve [--addr HOST:PORT] [--path DIR] [--repo owner/repo] [--done-window-days N]

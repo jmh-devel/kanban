@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/jmh-devel/kanban/internal/repo"
+	"github.com/jmh-devel/kanban/internal/state"
+	"gopkg.in/yaml.v3"
 )
 
 type Options struct {
@@ -159,6 +162,109 @@ var laneLabels = []laneLabel{
 // callers can decide whether to treat them as fatal or just log a warning.
 func EnsureLaneLabels(ctx context.Context, slug string, stdout io.Writer) error {
 	return setupLaneLabels(ctx, defaultRunner, slug, stdout)
+}
+
+// EnsureRepoKey checks if a repo_key is configured for slug; if not, it tries
+// to discover the key from tsctl's repos.yaml and saves it automatically.
+// It returns the configured or discovered key, or "" when no matching entry was
+// found. Missing repos.yaml files and missing entries are non-fatal.
+func EnsureRepoKey(ctx context.Context, slug string, stdout io.Writer) (string, error) {
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return "", nil
+	}
+
+	config, err := state.LoadConfig()
+	if err != nil {
+		return "", err
+	}
+	repoConfig := config.Repos[slug]
+	if key := strings.TrimSpace(repoConfig.RepoKey); key != "" {
+		return key, nil
+	}
+
+	reposFile := discoverReposFile(repoConfig.ReposFile)
+	if reposFile == "" {
+		return "", nil
+	}
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
+	}
+
+	key, err := findRepoKeyInReposFile(reposFile, slug)
+	if err != nil {
+		return "", err
+	}
+	if key == "" {
+		return "", nil
+	}
+
+	repoConfig.RepoKey = key
+	repoConfig.ReposFile = reposFile
+	config.Repos[slug] = repoConfig
+	if err := state.SaveConfig(config); err != nil {
+		return "", err
+	}
+	_, _ = fmt.Fprintf(stdout, "kanban: auto-set repo key for %s → %s\n", slug, key)
+	return key, nil
+}
+
+type reposYAML struct {
+	Repos []struct {
+		Key    string `yaml:"key"`
+		Github string `yaml:"github"`
+	} `yaml:"repos"`
+}
+
+func discoverReposFile(configured string) string {
+	for _, path := range []string{
+		strings.TrimSpace(os.Getenv("TSCTL_REPOS_FILE")),
+		defaultTSCTLReposFile(),
+		strings.TrimSpace(configured),
+	} {
+		if path != "" && fileExists(path) {
+			return path
+		}
+	}
+	return ""
+}
+
+func defaultTSCTLReposFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+	return filepath.Join(home, ".tsctl", "repos.yaml")
+}
+
+func findRepoKeyInReposFile(path, slug string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read repos file: %w", err)
+	}
+	var parsed reposYAML
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		return "", fmt.Errorf("decode repos file: %w", err)
+	}
+	for _, entry := range parsed.Repos {
+		if strings.TrimSpace(entry.Github) == slug {
+			return strings.TrimSpace(entry.Key), nil
+		}
+	}
+	return "", nil
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func setupLaneLabels(ctx context.Context, runner commandRunner, slug string, stdout io.Writer) error {

@@ -330,6 +330,7 @@ func runServe(args []string) int {
 	}
 
 	ensureLabels(context.Background(), *repoPath, *repoSlug)
+	ensureRepoKey(context.Background(), *repoPath, *repoSlug)
 
 	server, err := web.NewServer(func(ctx context.Context) (ghclient.Board, error) {
 		return loadBoard(ctx, *repoPath, *repoSlug, ghclient.BoardOptions{
@@ -361,6 +362,7 @@ func runOpen(args []string) int {
 	}
 
 	ensureLabels(context.Background(), *repoPath, *repoSlug)
+	ensureRepoKey(context.Background(), *repoPath, *repoSlug)
 
 	addr, err := findFreeAddr()
 	if err != nil {
@@ -553,6 +555,22 @@ func ensureLabels(ctx context.Context, startPath, repoSlug string) {
 	fmt.Printf("kanban: checking lane labels for %s...\n", details.Slug)
 	if err := initcmd.EnsureLaneLabels(ctx, details.Slug, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "kanban: label pre-flight warning: %v\n", err)
+	}
+}
+
+func ensureRepoKey(ctx context.Context, startPath, repoSlug string) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	details, err := repo.Detect(ctx, startPath, repoSlug)
+	if err != nil {
+		return
+	}
+	key, err := initcmd.EnsureRepoKey(ctx, details.Slug, os.Stdout)
+	if err != nil || key == "" {
+		fmt.Fprintf(os.Stderr,
+			"kanban: no repo_key for %s; run: kanban config set-repo-key --repo %s --repo-key NAME\n",
+			details.Slug, details.Slug)
 	}
 }
 

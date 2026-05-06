@@ -333,10 +333,43 @@
       color: var(--ink);
     }
 
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
     .message {
       color: var(--muted);
       font-size: 0.88rem;
       min-height: 1.2rem;
+    }
+
+    .warning {
+      display: none;
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid #d6a11d;
+      border-radius: 6px;
+      background: #fff4ce;
+      color: #4d3800;
+      font-size: 0.9rem;
+      line-height: 1.4;
+    }
+
+    .warning.open {
+      display: block;
+    }
+
+    .warning code {
+      display: block;
+      margin-top: 6px;
+      padding: 8px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.65);
+      color: var(--ink);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.84rem;
+      overflow-x: auto;
     }
 
     .detail-grid {
@@ -522,6 +555,7 @@
   <div class="modal-backdrop" id="dispatchBackdrop">
     <form class="modal" id="dispatchForm">
       <h2 id="dispatchTitle">Dispatch</h2>
+      <div class="warning" id="dispatchWarning" role="alert"></div>
       <div class="field">
         <label for="runner">Runner</label>
         <select id="runner" name="runner"></select>
@@ -562,6 +596,7 @@
     const repoKey = document.getElementById("repoKey");
     const preview = document.getElementById("commandPreview");
     const message = document.getElementById("dispatchMessage");
+    const dispatchWarning = document.getElementById("dispatchWarning");
     const confirmButton = document.getElementById("confirmDispatch");
     const detailBackdrop = document.getElementById("detailBackdrop");
     const detailTitle = document.getElementById("detailTitle");
@@ -667,6 +702,33 @@
       });
     }
 
+    function repoKeyCommand(repo) {
+      return `kanban config set-repo-key --repo ${repo} --repo-key NAME`;
+    }
+
+    function setDispatchOptions(options) {
+      const error = (options.error || "").trim();
+      const missingRepoKey = !(options.repo_key || "").trim();
+
+      repoKey.value = options.repo_key || "";
+      preview.value = options.preview || "";
+      message.textContent = missingRepoKey ? "" : error;
+      confirmButton.disabled = missingRepoKey;
+
+      dispatchWarning.textContent = "";
+      dispatchWarning.classList.toggle("open", missingRepoKey || Boolean(error));
+      if (missingRepoKey) {
+        dispatchWarning.append("⚠ This repo has no agent config. Run:");
+        const code = document.createElement("code");
+        code.textContent = repoKeyCommand(options.repo || "");
+        dispatchWarning.appendChild(code);
+        return;
+      }
+      if (error) {
+        dispatchWarning.textContent = error;
+      }
+    }
+
     function labelsText(issue) {
       return (issue.labels || []).map((label) => label.name).join(", ") || "None";
     }
@@ -726,9 +788,7 @@
       const options = await response.json();
       setOptions(runner, options.runners, options.runner);
       setOptions(mode, options.modes, options.mode);
-      repoKey.value = options.repo_key || options.repo;
-      preview.value = options.preview || "";
-      message.textContent = options.error || "";
+      setDispatchOptions(options);
       confirmButton.textContent = runner.value === "manual" ? "Record manual" : "Dispatch";
       backdrop.classList.add("open");
     }
@@ -754,8 +814,7 @@
       const params = new URLSearchParams({ issue, runner: runner.value, mode: mode.value });
       const response = await fetch(`/api/dispatch/options?${params}`);
       const options = await response.json();
-      preview.value = options.preview || "";
-      message.textContent = options.error || "";
+      setDispatchOptions(options);
     }
 
     cards.forEach((card) => {
@@ -857,6 +916,7 @@
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (confirmButton.disabled) return;
       if (!selected) return;
       const response = await fetch("/api/dispatch", {
         method: "POST",
